@@ -42,9 +42,11 @@ class COCODataLoader(DataLoaderTemplate):
                 yield image_raw, bbox
 
         train_set = tf.data.Dataset.from_generator(lambda: gen(self.config.TRAIN_ANNOTATION, self.config.TRAIN_IMAGE),
-                                                   output_types=(tf.float32, tf.float32))
+                                                   output_types=(tf.float32, tf.float32)
+                                                   ).shuffle(self.config.SHUFFLE_BUFFER)
         valid_set = tf.data.Dataset.from_generator(lambda: gen(self.config.VALID_ANNOTATION, self.config.VALID_IMAGE),
-                                                   output_types=(tf.float32, tf.float32))
+                                                   output_types=(tf.float32, tf.float32)
+                                                   ).shuffle(self.config.SHUFFLE_BUFFER)
 
         self.dataset = train_set, valid_set
 
@@ -59,12 +61,14 @@ class COCODataLoader(DataLoaderTemplate):
 
 
 class COCODataLoaderConfig(ConfigTemplate):
-    def __init__(self, dataset_root):
+    def __init__(self, dataset_root, shuffle_buffer):
         self.VALID_ANNOTATION = os.path.join(dataset_root, "annotations", "instances_val2017.json")
         self.VALID_IMAGE = os.path.join(dataset_root, "val2017")
 
         self.TRAIN_ANNOTATION = os.path.join(dataset_root, "annotations", "instances_train2017.json")
         self.TRAIN_IMAGE = os.path.join(dataset_root, "train2017")
+
+        self.SHUFFLE_BUFFER = shuffle_buffer
 
         def check(file):
             if not os.path.exists(file):
@@ -92,10 +96,10 @@ class COCODataLoaderConfig(ConfigTemplate):
 # test case
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)
-    my_config = COCODataLoaderConfig("dataset/coco/")
+    my_config = COCODataLoaderConfig("dataset/coco/", shuffle_buffer=10)
     my_set = COCODataLoader(config=my_config)
 
     for img, label_ in my_set.dataset[1]:
         cv2.imshow("Press any key to continue", my_set.draw_bbox(img, label_))
+        print(label_.numpy())
         cv2.waitKey(0)
-        print(label_)

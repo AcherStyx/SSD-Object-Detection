@@ -1,4 +1,5 @@
 import logging
+import tensorflow as tf
 
 from tensorflow.keras import layers, Model
 from templates import *
@@ -9,8 +10,6 @@ logger = logging.getLogger(__name__)
 class SSDObjectDetectionModel(ModelTemplate):
     def build_vgg_model(self):
         self.config: SSDObjectDetectionModelConfig
-
-        hidden_layer = input_layer = layers.Input(shape=self.config.INPUT_SHAPE)
 
         args_3_64 = {"filters": 64,
                      "kernel_size": (3, 3),
@@ -38,28 +37,44 @@ class SSDObjectDetectionModel(ModelTemplate):
                       "activation": "relu"}
         args_pool = {"pool_size": (2, 2), "strides": (2, 2), "padding": "SAME"}
 
-        hidden_layer = layers.Conv2D(**args_3_64)(hidden_layer)
-        hidden_layer = layers.Conv2D(**args_3_64)(hidden_layer)
-        hidden_layer = layers.MaxPool2D(**args_pool)(hidden_layer)
+        hidden_layer = input_layer = layers.Input(shape=self.config.INPUT_SHAPE)
 
-        hidden_layer = layers.Conv2D(**args_3_128)(hidden_layer)
-        hidden_layer = layers.Conv2D(**args_3_128)(hidden_layer)
-        hidden_layer = layers.MaxPool2D(**args_pool)(hidden_layer)
+        # hidden_layer = layers.Conv2D(**args_3_64)(hidden_layer)
+        # hidden_layer = layers.Conv2D(**args_3_64)(hidden_layer)
+        # hidden_layer = layers.MaxPool2D(**args_pool)(hidden_layer)
+        #
+        # hidden_layer = layers.Conv2D(**args_3_128)(hidden_layer)
+        # hidden_layer = layers.Conv2D(**args_3_128)(hidden_layer)
+        # hidden_layer = layers.MaxPool2D(**args_pool)(hidden_layer)
+        #
+        # hidden_layer = layers.Conv2D(**args_3_256)(hidden_layer)
+        # hidden_layer = layers.Conv2D(**args_3_256)(hidden_layer)
+        # hidden_layer = layers.Conv2D(**args_1_256)(hidden_layer)
+        # hidden_layer = layers.MaxPool2D(**args_pool)(hidden_layer)
+        #
+        # hidden_layer = layers.Conv2D(**args_3_512)(hidden_layer)
+        # hidden_layer = layers.Conv2D(**args_3_512)(hidden_layer)
+        # hidden_layer = layers.Conv2D(**args_1_512)(hidden_layer)
+        #
+        # output_layer = hidden_layer
+        #
+        # org_vgg = Model(inputs=input_layer,
+        #              outputs=output_layer,
+        #              name="VGG")
+        # # self.model = org_vgg
+        # # self.show_summary(with_plot=True)
+        # return org_vgg
 
-        hidden_layer = layers.Conv2D(**args_3_256)(hidden_layer)
-        hidden_layer = layers.Conv2D(**args_3_256)(hidden_layer)
-        hidden_layer = layers.Conv2D(**args_1_256)(hidden_layer)
-        hidden_layer = layers.MaxPool2D(**args_pool)(hidden_layer)
+        model = tf.keras.applications.VGG16(include_top=False, input_shape=(300, 300, 3))
+        pre_trained_vgg = Model(inputs=model.input, outputs=model.get_layer("block3_conv3").output)(input_layer)
+
+        hidden_layer = layers.MaxPool2D(**args_pool)(pre_trained_vgg)
 
         hidden_layer = layers.Conv2D(**args_3_512)(hidden_layer)
         hidden_layer = layers.Conv2D(**args_3_512)(hidden_layer)
         hidden_layer = layers.Conv2D(**args_1_512)(hidden_layer)
 
-        output_layer = hidden_layer
-
-        return Model(inputs=input_layer,
-                     outputs=output_layer,
-                     name="VGG")
+        return Model(inputs=input_layer, outputs=hidden_layer,name="Pre-trained_VGG")
 
     def build_ssd_model(self):
         self.config: SSDObjectDetectionModelConfig
@@ -144,7 +159,7 @@ class SSDObjectDetectionModel(ModelTemplate):
                      name="SSDObjectDetectionModel")
 
     def build(self, *args):
-        input_layer = layers.Input(shape=self.config.INPUT_SHAPE)
+        input_layer = layers.Input(shape=self.config.INPUT_SHAPE,name="Input_Image")
         vgg = self.build_vgg_model()(input_layer)
         ssd = self.build_ssd_model()(vgg)
 
