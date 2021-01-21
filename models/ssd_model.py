@@ -8,8 +8,27 @@ logger = logging.getLogger(__name__)
 
 
 class SSDObjectDetectionModel(ModelTemplate):
+    def __init__(self,
+                 classes,
+                 input_shape,
+                 base_model_output_shape=(38, 38, 512)):
+        self.INPUT_SHAPE = input_shape
+        self.BASE_MODEL_OUTPUT_SHAPE = base_model_output_shape
+        self.CLASSES = classes
+
+        # check parameters
+        try:
+            assert len(base_model_output_shape) == 3
+        except AssertionError:
+            logger.warning("Input shape should have 3 dimension")
+
+        self.FILTER_SIZE_1 = 4 * (self.CLASSES + 4)
+        self.FILTER_SIZE_2 = 6 * (self.CLASSES + 4)
+        self.SAMPLE_SIZE = (self.CLASSES + 4)
+
+        super(SSDObjectDetectionModel, self).__init__()
+
     def build_vgg_model(self):
-        self.config: SSDObjectDetectionModelConfig
 
         args_3_64 = {"filters": 64,
                      "kernel_size": (3, 3),
@@ -37,7 +56,7 @@ class SSDObjectDetectionModel(ModelTemplate):
                       "activation": "relu"}
         args_pool = {"pool_size": (2, 2), "strides": (2, 2), "padding": "SAME"}
 
-        hidden_layer = input_layer = layers.Input(shape=self.config.INPUT_SHAPE)
+        hidden_layer = input_layer = layers.Input(shape=self.INPUT_SHAPE)
 
         # hidden_layer = layers.Conv2D(**args_3_64)(hidden_layer)
         # hidden_layer = layers.Conv2D(**args_3_64)(hidden_layer)
@@ -74,12 +93,11 @@ class SSDObjectDetectionModel(ModelTemplate):
         hidden_layer = layers.Conv2D(**args_3_512)(hidden_layer)
         hidden_layer = layers.Conv2D(**args_1_512)(hidden_layer)
 
-        return Model(inputs=input_layer, outputs=hidden_layer,name="Pre-trained_VGG")
+        return Model(inputs=input_layer, outputs=hidden_layer, name="Pre-trained_VGG")
 
     def build_ssd_model(self):
-        self.config: SSDObjectDetectionModelConfig
 
-        base_network_output = layers.Input(shape=self.config.BASE_MODEL_OUTPUT_SHAPE)
+        base_network_output = layers.Input(shape=self.BASE_MODEL_OUTPUT_SHAPE)
 
         feature_map_1 = base_network_output
 
@@ -129,37 +147,52 @@ class SSDObjectDetectionModel(ModelTemplate):
                                       kernel_size=(3, 3),
                                       activation="relu")(hidden_layer)
 
-        detection_1 = layers.Conv2D(filters=self.config.FILTER_SIZE_1,
+        # detection result
+        detection_1 = layers.Conv2D(filters=self.FILTER_SIZE_1,
                                     kernel_size=(3, 3),
                                     activation="relu",
                                     padding="SAME")(feature_map_1)
-        detection_2 = layers.Conv2D(filters=self.config.FILTER_SIZE_2,
+        detection_1 = layers.Reshape((38 * 38 * 4, self.SAMPLE_SIZE))(detection_1)
+
+        detection_2 = layers.Conv2D(filters=self.FILTER_SIZE_2,
                                     kernel_size=(3, 3),
                                     activation="relu",
                                     padding="SAME")(feature_map_2)
-        detection_3 = layers.Conv2D(filters=self.config.FILTER_SIZE_2,
+        detection_2 = layers.Reshape((19 * 19 * 6, self.SAMPLE_SIZE))(detection_2)
+
+        detection_3 = layers.Conv2D(filters=self.FILTER_SIZE_2,
                                     kernel_size=(3, 3),
                                     activation="relu",
                                     padding="SAME")(feature_map_3)
-        detection_4 = layers.Conv2D(filters=self.config.FILTER_SIZE_2,
+        detection_3 = layers.Reshape((10 * 10 * 6, self.SAMPLE_SIZE))(detection_3)
+
+        detection_4 = layers.Conv2D(filters=self.FILTER_SIZE_2,
                                     kernel_size=(3, 3),
                                     activation="relu",
                                     padding="SAME")(feature_map_4)
-        detection_5 = layers.Conv2D(filters=self.config.FILTER_SIZE_1,
+        detection_4 = layers.Reshape((5 * 5 * 6, self.SAMPLE_SIZE))(detection_4)
+
+        detection_5 = layers.Conv2D(filters=self.FILTER_SIZE_1,
                                     kernel_size=(3, 3),
                                     activation="relu",
                                     padding="SAME")(feature_map_5)
-        detection_6 = layers.Conv2D(filters=self.config.FILTER_SIZE_1,
+        detection_5 = layers.Reshape((3 * 3 * 4, self.SAMPLE_SIZE))(detection_5)
+
+        detection_6 = layers.Conv2D(filters=self.FILTER_SIZE_1,
                                     kernel_size=(3, 3),
                                     activation="relu",
                                     padding="SAME")(feature_map_6)
+        detection_6 = layers.Reshape((1 * 1 * 4, self.SAMPLE_SIZE))(detection_6)
+
+        output_layer = layers.Concatenate(axis=-2)([detection_1, detection_2, detection_3,
+                                                    detection_4, detection_5, detection_6])
 
         return Model(inputs=base_network_output,
-                     outputs=(detection_1, detection_2, detection_3, detection_4, detection_5, detection_6),
+                     outputs=output_layer,
                      name="SSDObjectDetectionModel")
 
     def build(self, *args):
-        input_layer = layers.Input(shape=self.config.INPUT_SHAPE,name="Input_Image")
+        input_layer = layers.Input(shape=self.INPUT_SHAPE, name="Input_Image")
         vgg = self.build_vgg_model()(input_layer)
         ssd = self.build_ssd_model()(vgg)
 
@@ -167,31 +200,9 @@ class SSDObjectDetectionModel(ModelTemplate):
                            outputs=ssd)
 
 
-class SSDObjectDetectionModelConfig(ConfigTemplate):
-    def __init__(self,
-                 classes,
-                 input_shape,
-                 base_model_output_shape=(38, 38, 512),
-                 ):
-        self.INPUT_SHAPE = input_shape
-        self.BASE_MODEL_OUTPUT_SHAPE = base_model_output_shape
-        self.CLASSES = classes
-
-        # check parameters
-        try:
-            assert len(base_model_output_shape) == 3
-        except AssertionError:
-            logger.warning("Input shape should have 3 dimension")
-
-        self.FILTER_SIZE_1 = 4 * (self.CLASSES + 4)
-        self.FILTER_SIZE_2 = 6 * (self.CLASSES + 4)
-
-
 if __name__ == '__main__':
-    my_config = SSDObjectDetectionModelConfig(input_shape=(300, 300, 3),
-                                              base_model_output_shape=(38, 38, 512),
-                                              classes=20)
-
-    my_model = SSDObjectDetectionModel(my_config)
+    my_model = SSDObjectDetectionModel(input_shape=(300, 300, 3),
+                                       base_model_output_shape=(38, 38, 512),
+                                       classes=80)
 
     my_model.show_summary(with_plot=True)
