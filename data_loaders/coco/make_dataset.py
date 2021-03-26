@@ -1,4 +1,4 @@
-__all__ = ["COCODataLoader"]
+__all__ = ["COCODataLoader", "coco_names"]
 
 import tensorflow as tf
 import cv2
@@ -11,16 +11,26 @@ from skimage import io
 
 logger = logging.getLogger(__name__)
 
+coco_names = [
+    'person', 'bicycle', 'car', 'motorbike', 'aeroplane', 'bus', 'train', 'truck', 'boat', 'traffic light',
+    'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow',
+    'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',
+    'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard',
+    'tennis racket', 'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple', 'sandwich',
+    'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'sofa', 'pottedplant', 'bed',
+    'diningtable', 'toilet', 'tvmonitor', 'laptop', 'mouse', 'remote', 'keyboard', 'cell phone', 'microwave', 'oven',
+    'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush'
+]
+
 
 class COCODataLoader:
-    def __init__(self, dataset_root, shuffle_buffer,
-                 prefetch=10):
+    def __init__(self, dataset_root,
+                 prefetch=1):
 
         self._VALID_ANNOTATION = os.path.join(dataset_root, "annotations", "instances_val2017.json")
         self._VALID_IMAGE = os.path.join(dataset_root, "val2017")
         self._TRAIN_ANNOTATION = os.path.join(dataset_root, "annotations", "instances_train2017.json")
         self._TRAIN_IMAGE = os.path.join(dataset_root, "train2017")
-        self._SHUFFLE_BUFFER = shuffle_buffer
         self._PREFETCH = prefetch
 
         def check(file):
@@ -56,6 +66,7 @@ class COCODataLoader:
         coco_instance = COCO(annotation)
         img_ids = coco_instance.getImgIds()
         img_info = coco_instance.loadImgs(img_ids)
+        np.random.shuffle(img_info)
         for img_desc in img_info:
             if image_root is not None:
                 image_raw = io.imread(os.path.join(image_root, img_desc['file_name'])) / 255
@@ -72,10 +83,10 @@ class COCODataLoader:
     def load(self):
         train_set = tf.data.Dataset.from_generator(lambda: self.gen(self._TRAIN_ANNOTATION, self._TRAIN_IMAGE),
                                                    output_types=(tf.float32, tf.float32)
-                                                   ).shuffle(self._SHUFFLE_BUFFER).prefetch(self._PREFETCH)
+                                                   ).prefetch(self._PREFETCH)
         valid_set = tf.data.Dataset.from_generator(lambda: self.gen(self._VALID_ANNOTATION, self._VALID_IMAGE),
                                                    output_types=(tf.float32, tf.float32)
-                                                   ).shuffle(self._SHUFFLE_BUFFER).prefetch(self._PREFETCH)
+                                                   ).prefetch(self._PREFETCH)
 
         return train_set, valid_set
 
@@ -83,6 +94,7 @@ class COCODataLoader:
     def draw_bbox(image, label):
         # print(image, label)
         image_numpy = image.numpy()
+        image_numpy = cv2.cvtColor(image_numpy, cv2.COLOR_RGB2BGR)
         for cat, x, y, w, h in label:
             cv2.rectangle(image_numpy, (int(x), int(y)), (int(x) + int(w), int(y) + int(h)), (255, 255, 255), 1)
 
@@ -95,7 +107,7 @@ class COCODataLoader:
 # test case
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)
-    my_set = COCODataLoader(dataset_root="../../datasets/coco/", shuffle_buffer=1)
+    my_set = COCODataLoader(dataset_root="../../datasets/coco/")
 
     for img, label_ in my_set.get_dataset()[1]:
         cv2.imshow("Press any key to continue", my_set.draw_bbox(img, label_))

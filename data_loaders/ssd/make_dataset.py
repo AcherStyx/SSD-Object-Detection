@@ -4,18 +4,7 @@ import cv2
 import numpy as np
 import tensorflow as tf
 
-from ..coco.make_dataset import COCODataLoader
-
-coco_names = [
-    'person', 'bicycle', 'car', 'motorbike', 'aeroplane', 'bus', 'train', 'truck', 'boat', 'traffic light',
-    'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow',
-    'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',
-    'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard',
-    'tennis racket', 'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple', 'sandwich',
-    'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'sofa', 'pottedplant', 'bed',
-    'diningtable', 'toilet', 'tvmonitor', 'laptop', 'mouse', 'remote', 'keyboard', 'cell phone', 'microwave', 'oven',
-    'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush'
-]
+from ..coco.make_dataset import COCODataLoader, coco_names
 
 
 class SSDDataset:
@@ -80,6 +69,7 @@ class SSDDataset:
     def draw_bbox(self, batch_data):
         image, target = batch_data
         image = image[0].numpy()
+        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
         target = target[0].numpy()
 
         h, w = self._train_resize
