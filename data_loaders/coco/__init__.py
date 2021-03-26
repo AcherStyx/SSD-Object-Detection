@@ -1,3 +1,3 @@
-from .make_dataset import COCODataLoader, COCODataLoaderConfig
+from .make_dataset import COCODataLoader
 
-__all__ = ["COCODataLoader", "COCODataLoaderConfig"]
+__all__ = ["COCODataLoader"]
