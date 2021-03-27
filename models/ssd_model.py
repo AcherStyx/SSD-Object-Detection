@@ -1,5 +1,7 @@
 import logging
+import itertools
 import tensorflow as tf
+import math
 
 from tensorflow.keras import layers, Model
 
@@ -8,22 +10,15 @@ logger = logging.getLogger(__name__)
 
 class SSDObjectDetectionModel:
     def __init__(self,
-                 classes,
-                 input_shape=(320, 320, 3)):
-        self.INPUT_SHAPE = input_shape
+                 classes):
+        self.INPUT_SHAPE = (300, 300, 3)
         self.CLASSES = classes
-
-        # check parameters
-        try:
-            assert len(input_shape) == 3
-        except AssertionError:
-            logger.warning("Input shape should have 3 dimension")
 
         self.FILTER_SIZE_1 = 4 * (self.CLASSES + 4)
         self.FILTER_SIZE_2 = 6 * (self.CLASSES + 4)
         self.SAMPLE_SIZE = (self.CLASSES + 4)
 
-        self._model = self._build()
+        self._prior_box, self._model = self._build()
 
     def _build(self):
 
@@ -37,9 +32,9 @@ class SSDObjectDetectionModel:
                       "activation": "relu"}
         args_pool = {"pool_size": (2, 2), "strides": (2, 2), "padding": "SAME"}
 
-        input_layer = layers.Input(shape=(None, None, 3))
+        input_layer = layers.Input(shape=(300, 300, 3))
 
-        model = tf.keras.applications.VGG16(include_top=False)
+        model = tf.keras.applications.VGG16(include_top=False, input_shape=(300, 300, 3))
         pre_trained_vgg = Model(inputs=model.input, outputs=model.get_layer("block3_conv3").output)(input_layer)
 
         hidden_layer = layers.MaxPool2D(**args_pool)(pre_trained_vgg)
@@ -102,37 +97,66 @@ class SSDObjectDetectionModel:
                                     kernel_size=(3, 3),
                                     activation=None,
                                     padding="SAME")(feature_map_1)
-
         detection_2 = layers.Conv2D(filters=self.FILTER_SIZE_2,
                                     kernel_size=(3, 3),
                                     activation=None,
                                     padding="SAME")(feature_map_2)
-
         detection_3 = layers.Conv2D(filters=self.FILTER_SIZE_2,
                                     kernel_size=(3, 3),
                                     activation=None,
                                     padding="SAME")(feature_map_3)
-
         detection_4 = layers.Conv2D(filters=self.FILTER_SIZE_2,
                                     kernel_size=(3, 3),
                                     activation=None,
                                     padding="SAME")(feature_map_4)
-
         detection_5 = layers.Conv2D(filters=self.FILTER_SIZE_1,
                                     kernel_size=(3, 3),
                                     activation=None,
                                     padding="SAME")(feature_map_5)
-
         detection_6 = layers.Conv2D(filters=self.FILTER_SIZE_1,
                                     kernel_size=(3, 3),
                                     activation=None,
                                     padding="SAME")(feature_map_6)
 
-        output_layer = [detection_1, detection_2, detection_3, detection_4, detection_5, detection_6]
+        # calculate prior box for train
+        prior_box = []
+        size_list = [detection_1.shape[1:3], detection_2.shape[1:3], detection_3.shape[1:3],
+                     detection_4.shape[1:3], detection_5.shape[1:3], detection_6.shape[1:3]]
+        size_list = [list(x) for x in size_list]
+        s_k_refer = [21, 45, 99, 153, 207, 261, 315]
+        aspect_ratio = [[2], [2, 3], [2, 3], [2, 3], [2], [2]]
+        for index, (h, w) in enumerate(size_list):
+            for x, y in itertools.product(range(w), range(h), repeat=1):
+                cx = (x + 0.5) / w
+                cy = (y + 0.5) / h
 
-        return Model(inputs=input_layer,
-                     outputs=output_layer,
-                     name="SSDObjectDetectionModel")
+                # TODO: use calculate result
+                s_k = s_k_refer[index] / self.INPUT_SHAPE[0]
+                prior_box.append([cx, cy, s_k, s_k])
+
+                s_k_prime = math.sqrt(s_k * (s_k_refer[index + 1] / self.INPUT_SHAPE[0]))
+                prior_box.append([cx, cy, s_k_prime, s_k_prime])
+
+                for ratio in aspect_ratio[index]:
+                    prior_box.append([cx, cy, s_k * math.sqrt(ratio), s_k / math.sqrt(ratio)])
+                    prior_box.append([cx, cy, s_k / math.sqrt(ratio), s_k * math.sqrt(ratio)])
+
+        detection_1 = layers.Reshape(target_shape=(-1, self.CLASSES + 4))(detection_1)
+        detection_2 = layers.Reshape(target_shape=(-1, self.CLASSES + 4))(detection_2)
+        detection_3 = layers.Reshape(target_shape=(-1, self.CLASSES + 4))(detection_3)
+        detection_4 = layers.Reshape(target_shape=(-1, self.CLASSES + 4))(detection_4)
+        detection_5 = layers.Reshape(target_shape=(-1, self.CLASSES + 4))(detection_5)
+        detection_6 = layers.Reshape(target_shape=(-1, self.CLASSES + 4))(detection_6)
+        output_layer = layers.Concatenate(axis=-2)([detection_1, detection_2, detection_3,
+                                                    detection_4, detection_5, detection_6])
+        loc = output_layer[..., :4]
+        conf = layers.Softmax()(output_layer[..., 4:])
+
+        assert len(prior_box) == int(conf.shape[1])
+
+        return prior_box, Model(inputs=input_layer,
+                                outputs=[loc, conf],
+                                name="SSDObjectDetectionModel")
 
     @staticmethod
     @tf.function
@@ -149,15 +173,21 @@ class SSDObjectDetectionModel:
         return x, y
 
     @tf.function
-    def _loss(self, y_true, y_pred):
+    def _single_loss(self, y_true, y_pred):
+        """
+        calculate location and classification loss for single image
+        @param y_true: [[cls, x, y, w, h], ...]
+        @param y_pred: ssd featmap
+        """
         loss = tf.constant(0.0, dtype=tf.float32)
 
-        for image_true, image_pred in zip(y_true, y_pred):
-            for featmap_true, featmap_pred in zip(image_true, image_pred):
-                pass
+        loc, conf = y_pred
 
     def train(self, dataset):
-        pass
+        prior_box = self._prior_box
+
+        for image, targets in dataset:
+            pass
 
     def show_summary(self):
         self._model.summary()
@@ -171,8 +201,7 @@ class SSDObjectDetectionModel:
 
 
 if __name__ == '__main__':
-    my_model = SSDObjectDetectionModel(input_shape=(-1, -1, 3),
-                                       classes=80)
+    my_model = SSDObjectDetectionModel(classes=80)
     my_model.show_summary()
     dummy_input = tf.random.normal([1, 300, 300, 3])
     dummy_output = my_model.get_tf_model()(dummy_input)
