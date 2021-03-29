@@ -41,9 +41,9 @@ def iou_n(n_bbox_1, n_bbox_2):
     return union_area / (area_1 + area_2 - union_area + 1e-10)
 
 
-def match_bbox(target_box, default_box, thresh=0.5):
-    target_box_origin = target_box.copy()
-    default_box_origin = default_box.copy()
+def match_bbox(targets, default_box, thresh=0.5):
+    target_cls, target_box, default_box = np.array(targets[:, 0]), np.array(targets[:, 1:]), np.array(default_box)
+    target_box_origin, default_box_origin = target_box.copy(), default_box.copy()
     n_targets = target_box.shape[0]
     n_defaults = default_box.shape[0]
 
@@ -77,12 +77,16 @@ def match_bbox(target_box, default_box, thresh=0.5):
 
     mask = np.zeros((n_defaults,), dtype=np.bool)
     labeled_boxes = np.zeros_like(default_box_origin, dtype=np.float32)
+    labeled_cls = np.zeros((n_defaults,), dtype=np.int32)
     for index in index_list:
         mask[index[1]] = True
         labeled_boxes[index[1], :] = target_box_origin[index[0], :]
+        labeled_cls[index[1]] = int(target_cls[index[0]])
+    return labeled_cls, labeled_boxes, mask
 
 
 if __name__ == '__main__':
+    # test
     class Test(unittest.TestCase):
 
         def test_iou(self):
@@ -104,11 +108,24 @@ if __name__ == '__main__':
         def test_match_bbox(self):
             print("==========match bbox==========")
             dummy_default_box = np.array([[10, 10, 2, 2], [10, 10, 0.5, 0.5], [11, 11, 3, 3]], dtype=np.float32)
-            dummy_target_box = np.array([[10, 10, 1, 1], [11, 11, 2, 2]], dtype=np.float32)
+            dummy_target_box = np.array([[0, 10, 10, 1, 1], [1, 11, 11, 2, 2]], dtype=np.float32)
             match_bbox(dummy_target_box, dummy_default_box)
 
             dummy_default_box = np.random.normal(size=(20, 4))
-            dummy_target_box = np.random.normal(size=(2, 4))
+            dummy_target_box = np.random.normal(size=(2, 5))
             match_bbox(dummy_target_box, dummy_default_box)
+
+            dummy_default_box = np.array([[10, 10, 1, 1], [20, 20, 1, 1], [20, 20, 0.5, 0.5]])
+            dummy_target_box = np.array([[0, 10, 10, 0.5, 0.5], [1, 20, 20, 1, 1], [2, 20, 20, 0.5, 0.5]])
+            cls, loc, mask = match_bbox(dummy_target_box, dummy_default_box)
+            np.testing.assert_almost_equal(loc,
+                                           dummy_target_box[:, 1:])
+            dummy_default_box = np.array([[10, 10, 1, 1], [20, 20, 1.1, 1.1], [20, 20, 0.5, 0.5]])
+            dummy_target_box = np.array([[0, 15, 15, 13, 13], [1, 15, 15, 14, 14]])
+            cls, loc, mask = match_bbox(dummy_target_box, dummy_default_box)
+            np.testing.assert_almost_equal(loc,
+                                           np.array([[15, 15, 14, 14], [15, 15, 13, 13], [0, 0, 0, 0]]))
+            print(cls)
+
 
     unittest.main()

@@ -34,21 +34,21 @@ class SSDDataset:
 
     def _coco2ssd(self, batch_data):
         image, target = batch_data
-        target = target.numpy()
         h, w, _ = image.shape
-        image = tf.image.resize(image, self._train_resize)
+        image = cv2.resize(image, self._train_resize)
 
-        # # w,h->x_max,y_max
-        # scale = np.array([w, h, w, h])
-        # target[:, 3:] += target[:, 1:3]
-        # target[:, 1:] /= scale
+        # relative result
+        scale = np.array([w, h, w, h])
+        target[:, 1:3] += target[:, 3:] / 2
+        target[:, 1:] /= scale
 
         return image, target
 
     def _load(self):
         def data_iter(source):
-            for batch_data in source:
-                yield self._transfer(batch_data)
+            for batch_data in source.as_numpy_iterator():
+                image, target = self._transfer(batch_data)
+                yield image, target
 
         set_train = tf.data.Dataset.from_generator(generator=lambda: data_iter(self._data_source_train),
                                                    output_signature=(
@@ -77,23 +77,27 @@ class SSDDataset:
 
         image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 
-        h, w = self._train_resize
+        h_scale, w_scale = self._train_resize
 
-        for cls, x_min, y_min, x_max, y_max in target:
-            cv2.rectangle(image, (int(x_min * w), int(y_min * h)), (int(x_max * w), int(y_max * h)), (255, 255, 255))
-            cv2.putText(image, coco_names[int(cls)], (int(y_min), int(x_min)), cv2.FONT_HERSHEY_COMPLEX, 0.6,
+        for cls, x, y, w, h in target:
+            x_min, y_min, x_max, y_max = x - w / 2, y - h / 2, x + w / 2, y + h / 2
+            cv2.rectangle(image, (int(x_min * w_scale), int(y_min * h_scale)),
+                          (int(x_max * w_scale), int(y_max * h_scale)), (255, 255, 255))
+            cv2.putText(image, coco_names[int(cls)], (int(x_min * h_scale), int(y_min * w_scale)),
+                        cv2.FONT_HERSHEY_COMPLEX, 0.6,
                         coco_colors[int(cls)], 2)
 
         return image
 
 
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.DEBUG)
     loader = SSDDataset("../../datasets/coco",
-                        shuffle_buffer=10,
-                        batch_size=10)
+                        shuffle_buffer=1,
+                        batch_size=2)
 
     for my_image, my_target in tqdm(loader.get_dataset()[1]):
-        # print(my_image, my_target)
-        # cv2.imshow("preview", loader.draw_bbox((my_image, my_target)))
-        # cv2.waitKey(1)
+        print(my_target)
+        cv2.imshow("preview", loader.draw_bbox((my_image, my_target)))
+        cv2.waitKey(1)
         pass

@@ -57,8 +57,21 @@ class COCODataLoader:
                            "and the execution speed of the program is likely to slow down due to this.")
             self._TRAIN_IMAGE = None
 
-        self._coco_instance_train = COCO(self._TRAIN_ANNOTATION)
-        self._coco_instance_val = COCO(self._VAL_ANNOTATION)
+        train_cache_file = os.path.join(dataset_root, ".annocation_cache_train")
+        val_cache_file = os.path.join(dataset_root, ".annocation_cache_val")
+
+        try:
+            with open(train_cache_file, "rb") as f:
+                self._coco_instance_train = pickle.load(f)
+            with open(val_cache_file, "rb") as f:
+                self._coco_instance_val = pickle.load(f)
+        except FileNotFoundError:
+            self._coco_instance_train = COCO(self._TRAIN_ANNOTATION)
+            self._coco_instance_val = COCO(self._VAL_ANNOTATION)
+            with open(train_cache_file, "wb") as f:
+                pickle.dump(self._coco_instance_train, f)
+            with open(val_cache_file, "wb") as f:
+                pickle.dump(self._coco_instance_val, f)
 
         self._label_transfer_dict = self._load_label_transfer_dict()
         self._train_set, self._val_set = self.load()

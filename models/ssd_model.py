@@ -2,8 +2,10 @@ import logging
 import itertools
 import tensorflow as tf
 import math
-
+import numpy as np
 from tensorflow.keras import layers, Model
+
+from utils.bbox import match_bbox
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +15,7 @@ class SSDObjectDetectionModel:
                  classes):
         self.INPUT_SHAPE = (300, 300, 3)
         self.CLASSES = classes
+        self.THRESH = 0.5
 
         self.FILTER_SIZE_1 = 4 * (self.CLASSES + 4)
         self.FILTER_SIZE_2 = 6 * (self.CLASSES + 4)
@@ -183,11 +186,28 @@ class SSDObjectDetectionModel:
 
         loc, conf = y_pred
 
-    def train(self, dataset):
-        prior_box = self._prior_box
+        return loss
 
-        for image, targets in dataset:
-            pass
+    def train(self, dataset):
+
+        def batch_data_iter(tf_dataset: tf.data.Dataset, prior_box, thresh):
+            for iter_image, iter_targets in tf_dataset.as_numpy_iterator():
+                matched_cls, matched_loc, matched_mask = match_bbox(iter_targets, prior_box, thresh)
+
+                yield iter_image, matched_cls, matched_loc, matched_mask
+
+        dataset = tf.data.Dataset.from_generator(
+            generator=lambda: batch_data_iter(dataset, self._prior_box, self.THRESH),
+            output_signature=(
+                tf.TensorSpec(self.INPUT_SHAPE, dtype=tf.float32),
+                tf.TensorSpec((np.shape(self._prior_box)[0],), dtype=tf.int32),
+                tf.TensorSpec(np.shape(self._prior_box), dtype=tf.float32),
+                tf.TensorSpec((np.shape(self._prior_box)[0],), dtype=tf.bool)
+            )
+        ).batch(2)
+
+        for a, b, c, d in dataset:
+            print(a, b, c, d)
 
     def show_summary(self):
         self._model.summary()
@@ -199,11 +219,21 @@ class SSDObjectDetectionModel:
     def get_tf_model(self):
         return self._model
 
+    def get_prior_box(self):
+        return self._prior_box
+
 
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.DEBUG)
     my_model = SSDObjectDetectionModel(classes=80)
     my_model.show_summary()
-    dummy_input = tf.random.normal([1, 300, 300, 3])
+    dummy_input = tf.random.normal([5, 300, 300, 3])
     dummy_output = my_model.get_tf_model()(dummy_input)
     for i, out in enumerate(dummy_output):
         print("output {}: {}".format(i, out.shape))
+    print(np.shape(my_model.get_prior_box()))
+
+    from data_loaders.coco import COCODataLoader
+
+    data = COCODataLoader("../datasets/coco").get_dataset()[0]
+    my_model.train(data)
