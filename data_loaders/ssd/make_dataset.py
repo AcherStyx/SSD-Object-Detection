@@ -15,12 +15,10 @@ class SSDDataset:
 
     def __init__(self,
                  dataset_root,
-                 batch_size=1,
                  shuffle_buffer=1,
                  train_size=(300, 300),
                  dataset="COCO"):
         self._train_resize = train_size
-        self._batch_size = batch_size
         self._shuffle_buffer = shuffle_buffer
 
         if dataset == "COCO":
@@ -93,8 +91,7 @@ class SSDDataset:
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)
     loader = SSDDataset("../../datasets/coco",
-                        shuffle_buffer=1,
-                        batch_size=2)
+                        shuffle_buffer=1)
 
     for my_image, my_target in tqdm(loader.get_dataset()[1]):
         print(my_target)

@@ -5,7 +5,7 @@ import math
 import numpy as np
 from tensorflow.keras import layers, Model
 
-from utils.bbox import match_bbox
+from utils.bbox import match_bbox, apply_anchor_box
 
 logger = logging.getLogger(__name__)
 
@@ -157,9 +157,9 @@ class SSDObjectDetectionModel:
 
         assert len(prior_box) == int(conf.shape[1])
 
-        return prior_box, Model(inputs=input_layer,
-                                outputs=[loc, conf],
-                                name="SSDObjectDetectionModel")
+        return np.array(prior_box), Model(inputs=input_layer,
+                                          outputs=[loc, conf],
+                                          name="SSDObjectDetectionModel")
 
     @staticmethod
     @tf.function
@@ -190,13 +190,20 @@ class SSDObjectDetectionModel:
 
     def train(self, dataset):
 
+        # for image, targets in dataset.as_numpy_iterator():
+        #     print("start match")
+        #     cls, loc, mask = match_bbox(targets, self._prior_box, thresh=0.5)
+        #     print("cls:", cls, "loc:", loc, "mask", mask)
+
         def batch_data_iter(tf_dataset: tf.data.Dataset, prior_box, thresh):
             for iter_image, iter_targets in tf_dataset.as_numpy_iterator():
                 matched_cls, matched_loc, matched_mask = match_bbox(iter_targets, prior_box, thresh)
+                # print(matched_loc, self._prior_box)
+                matched_loc = apply_anchor_box(matched_loc, self._prior_box)
 
                 yield iter_image, matched_cls, matched_loc, matched_mask
 
-        dataset = tf.data.Dataset.from_generator(
+        batch_dataset = tf.data.Dataset.from_generator(
             generator=lambda: batch_data_iter(dataset, self._prior_box, self.THRESH),
             output_signature=(
                 tf.TensorSpec(self.INPUT_SHAPE, dtype=tf.float32),
@@ -204,10 +211,33 @@ class SSDObjectDetectionModel:
                 tf.TensorSpec(np.shape(self._prior_box), dtype=tf.float32),
                 tf.TensorSpec((np.shape(self._prior_box)[0],), dtype=tf.bool)
             )
-        ).batch(2)
+        ).batch(10)
 
-        for a, b, c, d in dataset:
-            print(a, b, c, d)
+        for image, ground_truth_cls, ground_truth_box, mask in batch_dataset:
+            print("[iter]")
+            pred_loc, pred_conf = self._model(image)
+
+            self._ssd_loss(pred_loc, pred_conf, ground_truth_cls, ground_truth_box, mask)
+
+            break
+
+    @staticmethod
+    def _ssd_loss(pred_loc, pred_conf, gt_cls, gt_box, gt_mask):
+        pred_cls, pred_box = pred_loc[:, :, 0], pred_loc[:, :, 1:]
+        pred_cls = tf.math.softmax(pred_conf, axis=-1)
+
+        # print(tf.boolean_mask(gt_cls, mask=gt_mask), tf.boolean_mask(pred_cls, mask=gt_mask))
+        # loss_cls = tf.keras.losses.sparse_categorical_crossentropy(gt_cls, pred_cls)
+        # print(loss_cls)
+        loss_cls = tf.reduce_sum(
+            tf.keras.losses.sparse_categorical_crossentropy(tf.boolean_mask(gt_cls, mask=gt_mask),
+                                                            tf.boolean_mask(pred_cls,
+                                                                            mask=gt_mask))
+        )
+        print("cls loss: ", loss_cls)
+
+        # TODO: add box loss
+        loss_box = None
 
     def show_summary(self):
         self._model.summary()
@@ -233,7 +263,7 @@ if __name__ == '__main__':
         print("output {}: {}".format(i, out.shape))
     print(np.shape(my_model.get_prior_box()))
 
-    from data_loaders.coco import COCODataLoader
+    from data_loaders.ssd import SSDDataset
 
-    data = COCODataLoader("../datasets/coco").get_dataset()[0]
+    data = SSDDataset("../datasets/coco").get_dataset()[0]
     my_model.train(data)

@@ -67,13 +67,19 @@ def match_bbox(targets, default_box, thresh=0.5):
         index_list.append(index)
         iou_result[:, index[1]] = 0.0
 
+    assert np.shape(iou_result) == (n_targets, n_defaults)
     while True:
-        index = np.unravel_index(np.argmax(iou_result_copy), np.shape(iou_result_copy))
+        index = np.unravel_index(np.argmax(iou_result), np.shape(iou_result))
         if iou_result[index] <= thresh:
+            # print("break iou:", iou_result[index])
+            # print("max iou:", np.max(iou_result))
             break
         # mask[index] = True
         index_list.append(index)
         iou_result[:, index[1]] = 0.0
+
+    # print("target number:", len(target_box_origin))
+    # print("index list len: ", len(index_list))
 
     mask = np.zeros((n_defaults,), dtype=np.bool)
     labeled_boxes = np.zeros_like(default_box_origin, dtype=np.float32)
@@ -83,6 +89,15 @@ def match_bbox(targets, default_box, thresh=0.5):
         labeled_boxes[index[1], :] = target_box_origin[index[0], :]
         labeled_cls[index[1]] = int(target_cls[index[0]])
     return labeled_cls, labeled_boxes, mask
+
+
+def apply_anchor_box(origin_bbox, default_box):
+    assert np.shape(origin_bbox) == np.shape(default_box)  # n * [x,y,w,h]
+
+    xy_relative = (origin_bbox[:, :2] - default_box[:, :2]) / default_box[:, 2:]
+    wh_relative = origin_bbox[:, 2:] / default_box[:, 2:]
+
+    return np.concatenate([xy_relative, wh_relative], axis=-1)
 
 
 if __name__ == '__main__':
