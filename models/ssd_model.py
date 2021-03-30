@@ -3,7 +3,7 @@ import itertools
 import tensorflow as tf
 import math
 import numpy as np
-from tensorflow.keras import layers, Model
+from tensorflow.keras import layers, Model, optimizers
 
 from utils.bbox import match_bbox, apply_anchor_box
 
@@ -22,6 +22,7 @@ class SSDObjectDetectionModel:
         self.SAMPLE_SIZE = (self.CLASSES + 4)
 
         self._prior_box, self._model = self._build()
+        self._optimizer = optimizers.Adam()
 
     def _build(self):
 
@@ -198,46 +199,61 @@ class SSDObjectDetectionModel:
         def batch_data_iter(tf_dataset: tf.data.Dataset, prior_box, thresh):
             for iter_image, iter_targets in tf_dataset.as_numpy_iterator():
                 matched_cls, matched_loc, matched_mask = match_bbox(iter_targets, prior_box, thresh)
-                # print(matched_loc, self._prior_box)
+                # print("---------")
+                # print(matched_cls, matched_loc, self._prior_box)
                 matched_loc = apply_anchor_box(matched_loc, self._prior_box)
+                # print("transfer shape:", np.shape(matched_loc))
 
-                yield iter_image, matched_cls, matched_loc, matched_mask
+                yield iter_image, (matched_cls, matched_loc, matched_mask)
 
         batch_dataset = tf.data.Dataset.from_generator(
             generator=lambda: batch_data_iter(dataset, self._prior_box, self.THRESH),
             output_signature=(
                 tf.TensorSpec(self.INPUT_SHAPE, dtype=tf.float32),
-                tf.TensorSpec((np.shape(self._prior_box)[0],), dtype=tf.int32),
-                tf.TensorSpec(np.shape(self._prior_box), dtype=tf.float32),
-                tf.TensorSpec((np.shape(self._prior_box)[0],), dtype=tf.bool)
+                (tf.TensorSpec((np.shape(self._prior_box)[0],), dtype=tf.int32),
+                 tf.TensorSpec(np.shape(self._prior_box), dtype=tf.float32),
+                 tf.TensorSpec((np.shape(self._prior_box)[0],), dtype=tf.bool))
             )
         ).batch(10)
 
-        for image, ground_truth_cls, ground_truth_box, mask in batch_dataset:
-            print("[iter]")
-            pred_loc, pred_conf = self._model(image)
+        for image, (ground_truth_cls, ground_truth_box, mask) in batch_dataset:
+            with tf.GradientTape() as tape:
+                # print("==========train step start==========")
+                pred_loc, pred_conf = self._model(image)
+                total_loss = self._ssd_loss((ground_truth_cls, ground_truth_box, mask), (pred_loc, pred_conf))
+                # print("==========train step end==========")
 
-            self._ssd_loss(pred_loc, pred_conf, ground_truth_cls, ground_truth_box, mask)
-
-            break
+            ssd_gradient = tape.gradient(total_loss, self._model.trainable_variables)
+            self._optimizer.apply_gradients(
+                zip(ssd_gradient, self._model.trainable_variables)
+            )
+            logger.debug("SSD Training loss: %s", total_loss.numpy())
 
     @staticmethod
-    def _ssd_loss(pred_loc, pred_conf, gt_cls, gt_box, gt_mask):
-        pred_cls, pred_box = pred_loc[:, :, 0], pred_loc[:, :, 1:]
+    def _ssd_loss(y_true, y_pred):
+        # print("loss input: ", y_true, y_pred)
+        gt_cls, gt_box, gt_mask = y_true
+        pred_loc, pred_conf = y_pred
+        pred_box = tf.sigmoid(pred_loc)
         pred_cls = tf.math.softmax(pred_conf, axis=-1)
 
         # print(tf.boolean_mask(gt_cls, mask=gt_mask), tf.boolean_mask(pred_cls, mask=gt_mask))
         # loss_cls = tf.keras.losses.sparse_categorical_crossentropy(gt_cls, pred_cls)
         # print(loss_cls)
         loss_cls = tf.reduce_sum(
-            tf.keras.losses.sparse_categorical_crossentropy(tf.boolean_mask(gt_cls, mask=gt_mask),
-                                                            tf.boolean_mask(pred_cls,
-                                                                            mask=gt_mask))
+            tf.keras.losses.sparse_categorical_crossentropy(tf.boolean_mask(gt_cls, gt_mask),
+                                                            tf.boolean_mask(pred_cls, gt_mask))
         )
-        print("cls loss: ", loss_cls)
+        # print("cls loss: ", loss_cls)
 
         # TODO: add box loss
-        loss_box = None
+        loss_box = tf.reduce_sum(
+            tf.keras.losses.mean_absolute_error(tf.boolean_mask(gt_box, gt_mask),
+                                                tf.boolean_mask(pred_box, gt_mask))
+        )
+        # print("loc loss: ", loss_box)
+
+        return loss_cls + loss_box
 
     def show_summary(self):
         self._model.summary()

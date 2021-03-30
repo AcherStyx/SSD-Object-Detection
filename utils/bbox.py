@@ -93,9 +93,10 @@ def match_bbox(targets, default_box, thresh=0.5):
 
 def apply_anchor_box(origin_bbox, default_box):
     assert np.shape(origin_bbox) == np.shape(default_box)  # n * [x,y,w,h]
+    # print(np.shape(origin_bbox))
 
     xy_relative = (origin_bbox[:, :2] - default_box[:, :2]) / default_box[:, 2:]
-    wh_relative = origin_bbox[:, 2:] / default_box[:, 2:]
+    wh_relative = np.log(origin_bbox[:, 2:] / np.maximum(default_box[:, 2:], 1e-8))
 
     return np.concatenate([xy_relative, wh_relative], axis=-1)
 
