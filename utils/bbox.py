@@ -1,4 +1,5 @@
 import unittest
+import cv2
 import tensorflow as tf
 import numpy as np
 
@@ -41,8 +42,8 @@ def iou_n(n_bbox_1, n_bbox_2):
     return union_area / (area_1 + area_2 - union_area + 1e-10)
 
 
-def match_bbox(targets, default_box, thresh=0.5):
-    target_cls, target_box, default_box = np.array(targets[:, 0]), np.array(targets[:, 1:]), np.array(default_box)
+def match_bbox(cls, bbox, default_box, thresh=0.5):
+    target_cls, target_box, default_box = np.array(cls), np.array(bbox), np.array(default_box)
     target_box_origin, default_box_origin = target_box.copy(), default_box.copy()
     n_targets = target_box.shape[0]
     n_defaults = default_box.shape[0]
@@ -101,47 +102,32 @@ def apply_anchor_box(origin_bbox, default_box):
     return np.concatenate([xy_relative, wh_relative], axis=-1)
 
 
-if __name__ == '__main__':
-    # test
-    class Test(unittest.TestCase):
+def draw_bbox(image, bbox, cls_label, cls_names, cls_color, show_names=True):
+    """
+    draw bounding box on image
+    @param image: image in tf.Tensor, numpy array or python list
+    @param bbox: [[cx,cy,w,h],...] int value
+    @param cls_label: [cls1,cls2,...]
+    @param cls_names: [name1,name2,...]
+    @param cls_color: [color1,color2,...]
+    @param show_names:
+    @return:
+    """
+    if isinstance(image, tf.Tensor):
+        image = image.numpy()
+    image_numpy = np.array(image)
+    if image_numpy.dtype == np.float32 or image_numpy.dtype == np.float64:
+        image_numpy *= 255
+    image_numpy = image_numpy.astype(np.uint8)
 
-        def test_iou(self):
-            self.assertAlmostEqual(iou([10, 10, 2, 2], [10, 10, 2, 2]), 1, places=4)
-            self.assertAlmostEqual(iou([10, 10, 1, 1], [20, 20, 1, 1]), 0, places=4)
-            self.assertAlmostEqual(iou([10, 10, 2, 2], [10, 10, 4, 4]), 0.25, places=4)
-            self.assertAlmostEqual(iou([10, 10, 0, 0], [20, 20, 0, 0]), 0, places=4)
-            self.assertAlmostEqual(iou([10, 10, -1, -1], [10, 10, -1, -1]), 0, places=4)
-            self.assertAlmostEqual(iou([10, 10, 2, 2], [11, 11, 2, 2]), 1 / 7, places=4)
-            self.assertAlmostEqual(iou([10, 10, 6, 6], [13, 13, 2, 2]), 1 / (36 + 3), places=4)
-            self.assertAlmostEqual(iou([10, -10, 1, 1], [10, -10, 1, 1]), 1, places=4)
+    image_numpy = cv2.cvtColor(image_numpy, cv2.COLOR_RGB2BGR)
+    for cat, (cx, cy, w, h) in zip(cls_label, bbox):
+        cv2.rectangle(image_numpy,
+                      (int(cx - w / 2), int(cy - h / 2)), (int(cx + w / 2), int(cy + h / 2)),
+                      cls_color[int(cat)], 2)
+        if show_names:
+            cv2.putText(image_numpy, cls_names[int(cat)], (int(cx - w / 2), int(cy - h / 2) - 6),
+                        cv2.FONT_HERSHEY_COMPLEX, 0.6,
+                        cls_color[int(cat)], 2)
 
-        def test_iou_n(self):
-            print(
-                iou_n(tf.Variable([[10, 10, 2, 2], [10, 10, 1, 1], [10, 10, 2, 2]], dtype=tf.float32),
-                      tf.Variable([[10, 10, 2, 2], [20, 20, 1, 1], [10, 10, 4, 4]], dtype=tf.float32))
-            )
-
-        def test_match_bbox(self):
-            print("==========match bbox==========")
-            dummy_default_box = np.array([[10, 10, 2, 2], [10, 10, 0.5, 0.5], [11, 11, 3, 3]], dtype=np.float32)
-            dummy_target_box = np.array([[0, 10, 10, 1, 1], [1, 11, 11, 2, 2]], dtype=np.float32)
-            match_bbox(dummy_target_box, dummy_default_box)
-
-            dummy_default_box = np.random.normal(size=(20, 4))
-            dummy_target_box = np.random.normal(size=(2, 5))
-            match_bbox(dummy_target_box, dummy_default_box)
-
-            dummy_default_box = np.array([[10, 10, 1, 1], [20, 20, 1, 1], [20, 20, 0.5, 0.5]])
-            dummy_target_box = np.array([[0, 10, 10, 0.5, 0.5], [1, 20, 20, 1, 1], [2, 20, 20, 0.5, 0.5]])
-            cls, loc, mask = match_bbox(dummy_target_box, dummy_default_box)
-            np.testing.assert_almost_equal(loc,
-                                           dummy_target_box[:, 1:])
-            dummy_default_box = np.array([[10, 10, 1, 1], [20, 20, 1.1, 1.1], [20, 20, 0.5, 0.5]])
-            dummy_target_box = np.array([[0, 15, 15, 13, 13], [1, 15, 15, 14, 14]])
-            cls, loc, mask = match_bbox(dummy_target_box, dummy_default_box)
-            np.testing.assert_almost_equal(loc,
-                                           np.array([[15, 15, 14, 14], [15, 15, 13, 13], [0, 0, 0, 0]]))
-            print(cls)
-
-
-    unittest.main()
+    return image_numpy
