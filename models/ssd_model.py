@@ -15,9 +15,10 @@ logger = logging.getLogger(__name__)
 
 class SSDObjectDetectionModel:
     def __init__(self,
-                 classes):
+                 classes,
+                 learning_rate=0.001):
         self.INPUT_SHAPE = (300, 300, 3)
-        self.CLASSES = classes
+        self.CLASSES = classes + 1
         self.THRESH = 0.5
 
         self.FILTER_SIZE_1 = 4 * (self.CLASSES + 4)
@@ -26,7 +27,7 @@ class SSDObjectDetectionModel:
 
         self._prior_box, self._model = self._build()
 
-        self._optimizer = optimizers.Adam(learning_rate=0.001)
+        self._optimizer = optimizers.Adam(learning_rate=learning_rate)
 
     def _build(self):
 
@@ -44,7 +45,8 @@ class SSDObjectDetectionModel:
 
         model = tf.keras.applications.VGG16(include_top=False, input_shape=(300, 300, 3))
         pre_trained_vgg = Model(inputs=model.input,
-                                outputs=model.get_layer("block3_conv3").output
+                                outputs=model.get_layer("block3_conv3").output,
+                                trainable=False
                                 )(input_layer)
 
         hidden_layer = layers.MaxPool2D(**args_pool)(pre_trained_vgg)
@@ -161,19 +163,18 @@ class SSDObjectDetectionModel:
 
                 # TODO: use calculate result
                 s_k = s_k_refer[index] / self.INPUT_SHAPE[0]
-                prior_box.append([cy, cx, s_k, s_k])
+                prior_box.append([cx, cy, s_k, s_k])
 
                 s_k_prime = math.sqrt(s_k * (s_k_refer[index + 1] / self.INPUT_SHAPE[0]))
-                prior_box.append([cy, cx, s_k_prime, s_k_prime])
+                prior_box.append([cx, cy, s_k_prime, s_k_prime])
 
                 for ratio in aspect_ratio[index]:
-                    prior_box.append([cy, cx, s_k * math.sqrt(ratio), s_k / math.sqrt(ratio)])
-                    prior_box.append([cy, cx, s_k / math.sqrt(ratio), s_k * math.sqrt(ratio)])
+                    prior_box.append([cx, cy, s_k * math.sqrt(ratio), s_k / math.sqrt(ratio)])
+                    prior_box.append([cx, cy, s_k / math.sqrt(ratio), s_k * math.sqrt(ratio)])
 
         return np.array(prior_box)
 
     @staticmethod
-    @tf.function
     def _get_single_level_center_point(featmap_size, image_size, dtype=tf.float32, flatten=False):
         strides = image_size / featmap_size
         h, w = featmap_size
@@ -186,7 +187,7 @@ class SSDObjectDetectionModel:
             x = x.flatten()
         return x, y
 
-    def get_train_set(self, dataset):
+    def get_train_set(self, dataset, batch_size=1):
         def batch_data_iter(tf_dataset: tf.data.Dataset, prior_box, thresh):
             for iter_image, iter_cls, iter_bbox in tf_dataset.as_numpy_iterator():
                 matched_cls, matched_loc, matched_mask = match_bbox(iter_cls, iter_bbox, prior_box, thresh)
@@ -202,13 +203,13 @@ class SSDObjectDetectionModel:
                  tf.TensorSpec(np.shape(self._prior_box), dtype=tf.float32),
                  tf.TensorSpec((np.shape(self._prior_box)[0],), dtype=tf.bool))
             )
-        ).batch(2, drop_remainder=True)
+        ).batch(batch_size, drop_remainder=True)
 
         return batch_dataset
 
-    def train(self, dataset, epoch=1):
+    def train(self, dataset, epoch=1, batch_size=1):
 
-        batch_dataset = self.get_train_set(dataset)
+        batch_dataset = self.get_train_set(dataset, batch_size)
 
         for i in range(epoch):
             logger.info("Epoch %s/%s", i + 1, epoch)
@@ -223,48 +224,57 @@ class SSDObjectDetectionModel:
                 self._optimizer.apply_gradients(
                     zip(ssd_gradient, self._model.trainable_variables)
                 )
-                self.visualize(image, pred_conf, pred_loc, name="predict", thresh=0.7)
-                self.visualize_dataset(image, ground_truth_cls, ground_truth_box, mask, name="ground truth")
+                self.visualize(image, pred_conf, pred_loc, name="predict", thresh=0.7, show=True)
+                self.visualize(image, pred_conf, pred_loc, name="predict_with_mask", thresh=0.1, show=True, mask=mask)
+                self.visualize_dataset(image, ground_truth_cls, ground_truth_box, mask, name="ground truth", show=True)
 
-                logger.debug("SSD Training loss: %s", total_loss.numpy())
+                # logger.debug("SSD Training loss: %s", total_loss.numpy())
 
     @staticmethod
-    @tf.function
     def _ssd_loss(y_true, y_pred):
-        # print("loss input: ", y_true, y_pred)
         gt_cls, gt_box, gt_mask = y_true
         pred_box, pred_cls = y_pred
 
         pred_box = tf.tanh(pred_box)
-        pred_cls = tf.sigmoid(pred_cls)
 
-        # print(tf.boolean_mask(gt_cls, mask=gt_mask), tf.boolean_mask(pred_cls, mask=gt_mask))
-        # loss_cls = tf.keras.losses.sparse_categorical_crossentropy(gt_cls, pred_cls)
-        # print(loss_cls)
-        # loss_cls = tf.reduce_sum(
-        #     tf.keras.losses.sparse_categorical_crossentropy(tf.boolean_mask(gt_cls, gt_mask),
-        #                                                     tf.boolean_mask(pred_cls, gt_mask))
-        # )
-        # loss_cls += tf.reduce_sum(
-        #     tf.keras.losses.binary_crossentropy(0.0,
-        #                                         tf.boolean_mask(
-        #                                             pred_cls, tf.equal(gt_mask, tf.zeros_like(gt_mask, dtype=tf.bool)))
-        #                                         )
-        # ) * 0.05
+        # have same batch size
+        assert tf.shape(gt_cls)[0] == tf.shape(gt_box)[0] == tf.shape(gt_mask)[0] == tf.shape(pred_box)[0] == \
+               tf.shape(pred_cls)[0]
+        # number of prior box == number of output box
+        assert tf.boolean_mask(pred_cls, tf.equal(gt_mask, tf.zeros_like(gt_mask, dtype=tf.bool))).shape[0] + \
+               tf.boolean_mask(gt_cls, gt_mask).shape[0] == gt_cls.shape[0] * gt_cls.shape[1]
 
-        # TODO: add box loss
+        batch_size = tf.cast(tf.shape(gt_mask)[0], tf.float32)
 
-        print("masked box: ", tf.boolean_mask(gt_box, gt_mask), tf.boolean_mask(pred_box, gt_mask))
-        print("loss before sum: ", tf.keras.losses.mean_absolute_error(tf.boolean_mask(gt_box, gt_mask),
-                                                                       tf.boolean_mask(pred_box, gt_mask)))
-        loss_box = tf.reduce_sum(
-            tf.abs(tf.boolean_mask(gt_box, gt_mask) - tf.boolean_mask(pred_box, gt_mask))
+        # cls loss positive
+        loss_cls_pos_list = tf.nn.sparse_softmax_cross_entropy_with_logits(
+            tf.boolean_mask(gt_cls, gt_mask),
+            tf.boolean_mask(pred_cls, gt_mask)
         )
-        # print("loc loss: ", loss_box)
+        loss_cls_pos = tf.reduce_sum(loss_cls_pos_list) / batch_size
+        # cls loss negative
+        mask_neg = tf.equal(gt_mask, tf.zeros_like(gt_mask, dtype=tf.bool))
+        loss_cls_neg_list = tf.nn.sparse_softmax_cross_entropy_with_logits(
+            tf.boolean_mask(tf.ones_like(gt_cls) * (tf.shape(pred_cls)[-1] - 1), mask_neg),
+            tf.boolean_mask(pred_cls, mask_neg)
+        )
+        loss_cls_neg_list, _ = tf.math.top_k(loss_cls_neg_list, tf.shape(loss_cls_pos_list)[0] * 3)
+        loss_cls_neg = tf.reduce_sum(loss_cls_neg_list) / batch_size
+        # loc loss
+        loss_box = tf.reduce_sum(
+            tf.abs(tf.boolean_mask(pred_box, gt_mask) - tf.boolean_mask(gt_box, gt_mask))
+        ) / batch_size
 
-        logger.debug("Loss function loc loss: %s", loss_box)
+        # logger.debug("masked box gt: %s", tf.boolean_mask(gt_box, gt_mask)[0])
+        # logger.debug("masked box pred: %s", tf.boolean_mask(pred_box, gt_mask)[0])
+        # logger.debug("Label | Pred: %s",
+        #              tf.concat([tf.boolean_mask(gt_box, gt_mask), tf.boolean_mask(pred_box, gt_mask)], axis=-1))
 
-        return loss_box
+        logger.debug("Loss function loc loss: %s | cls loss: %s | cls loss negative: %s | total loss: %s",
+                     loss_box.numpy(), loss_cls_pos.numpy(), loss_cls_neg.numpy(),
+                     (loss_box + loss_cls_pos + loss_cls_neg).numpy())
+
+        return loss_box + loss_cls_pos + loss_cls_neg
 
     def show_summary(self):
         self._model.summary()
@@ -280,15 +290,25 @@ class SSDObjectDetectionModel:
         return self._prior_box
 
     def visualize_prior_box(self, name="ssd visualize"):
+        cx_pre = self._prior_box[0][0]
+        cy_pre = self._prior_box[0][1]
         image = np.zeros([300, 300, 3], dtype=np.uint8)
-        for cx, cy, w, h in self._prior_box[100 * 4:105 * 4]:
-            cv2.rectangle(image,
-                          (int((cx - w / 2) * self.INPUT_SHAPE[1]), int((cy - h / 2) * self.INPUT_SHAPE[0])),
-                          (int((cx + w / 2) * self.INPUT_SHAPE[1]), int((cy + h / 2) * self.INPUT_SHAPE[0])),
-                          (255, 255, 255)
-                          )
-        cv2.imshow(name, image)
-        cv2.waitKey(0)
+        for cx, cy, w, h in self._prior_box:
+            if cx != cx_pre or cy != cy_pre:
+                cv2.imshow(name, image)
+                ch = cv2.waitKey(0)
+                if ch == "q":
+                    break
+                image = np.zeros([300, 300, 3], dtype=np.uint8)
+                cx_pre = cx
+                cy_pre = cy
+
+            cv2.rectangle(
+                image,
+                (int((cx - w / 2) * self.INPUT_SHAPE[1]), int((cy - h / 2) * self.INPUT_SHAPE[0])),
+                (int((cx + w / 2) * self.INPUT_SHAPE[1]), int((cy + h / 2) * self.INPUT_SHAPE[0])),
+                (255, 255, 255)
+            )
 
     def visualize_dataset(self, image, gt_cls, gt_bbox, mask, name="ssd visualize", show=False):
         image = np.array(image.numpy()) / 2 + 0.5
@@ -307,7 +327,7 @@ class SSDObjectDetectionModel:
 
         for cls, bbox, default_box in zip(gt_cls_masked, gt_bbox_masked, default_box_masked):
             # print(cls, bbox)
-            cx, cy = (bbox[:2] * default_box[2:] + default_box[:2] + np.random.normal(scale=0.001, size=(2,))) * 300
+            cx, cy = (bbox[:2] * default_box[2:] + default_box[:2]) * 300
             w, h = np.exp(bbox[2:]) * default_box[2:] * 300
             # print(image, cx, cy, w, h)
             cv2.rectangle(image, (int(cx - w / 2), int(cy - h / 2)), (int(cx + w / 2), int(cy + h / 2)),
@@ -319,11 +339,10 @@ class SSDObjectDetectionModel:
 
         return image
 
-    def visualize(self, image, pred_conf, pred_bbox, thresh=0.5, name="ssd visualize"):
+    def visualize(self, image, pred_conf, pred_bbox, thresh=0.5, name="ssd visualize", show=False, mask=None):
         pred_bbox = tf.tanh(pred_bbox)
-        pred_conf = tf.sigmoid(pred_conf)
-        mask = tf.reduce_max(pred_conf, axis=-1) > thresh
-        # print(tf.reduce_max(pred_conf, axis=-1))
-        # print(mask)
+        pred_conf = tf.nn.softmax(pred_conf)
+        if mask is None:
+            mask = tf.reduce_max(pred_conf[..., :-1], axis=-1) > thresh
         pred_cls = tf.argmax(pred_conf, axis=-1)
-        self.visualize_dataset(image, pred_cls, pred_bbox, mask, name=name)
+        return self.visualize_dataset(image, pred_cls, pred_bbox, mask, name=name, show=show)

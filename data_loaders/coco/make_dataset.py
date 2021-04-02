@@ -96,7 +96,9 @@ class COCODataLoader:
         @param image_root: path to image root, None means download from the `coco_url` in annotation file
         """
         img_ids = coco_instance.getImgIds()
+        # TODO: remove debug setting
         img_info = coco_instance.loadImgs(img_ids)
+        # img_info = coco_instance.loadImgs(img_ids)[:8]
         if self._SHUFFLE:
             np.random.shuffle(img_info)
         for img_desc in img_info:
