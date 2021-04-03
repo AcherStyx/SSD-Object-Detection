@@ -11,8 +11,8 @@ class TestSSDDataset(unittest.TestCase):
         super().__init__(*args, **kwargs)
 
         try:
-            self.dataset = SSDDataset("datasets/coco")
+            self.dataset = SSDDataLoader("datasets/coco")
         except ValueError:
-            self.dataset = SSDDataset("../../../datasets/coco")
+            self.dataset = SSDDataLoader("../../../datasets/coco")
 
         self.train, self.val = self.dataset.get_dataset()

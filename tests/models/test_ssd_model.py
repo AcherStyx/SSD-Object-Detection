@@ -1,21 +1,24 @@
 import unittest
+from tensorflow.keras import optimizers
 
-from data_loaders.ssd import SSDDataset
+from data_loaders.ssd import SSDDataLoader
 from models.ssd_model import *
 
 
 class TestSSDObjectDetectionModel(unittest.TestCase):
     def __init__(self, *args, **kwargs):
-        self.model = SSDObjectDetectionModel(classes=80, learning_rate=0.0001)
+        self.model = SSDObjectDetectionModel(classes=80, learning_rate=0.001)
         self.model.show_summary()
 
         self.dummy_input = tf.random.normal([5, 300, 300, 3])
         self.dummy_output = self.model.get_tf_model()(self.dummy_input)
 
         try:
-            self.coco_dataset_train, self.coco_dataset_val = SSDDataset("./datasets/coco").get_dataset()
+            self.dataset = SSDDataLoader("./datasets/coco")
+            self.coco_dataset_train, self.coco_dataset_val = self.dataset.get_dataset()
         except ValueError:
-            self.coco_dataset_train, self.coco_dataset_val = SSDDataset("../../datasets/coco").get_dataset()
+            self.dataset = SSDDataLoader("../../datasets/coco")
+            self.coco_dataset_train, self.coco_dataset_val = self.dataset.get_dataset()
 
         super().__init__(*args, **kwargs)
 
@@ -43,7 +46,8 @@ class TestSSDObjectDetectionModel(unittest.TestCase):
 
     def test_train(self):
         logging.basicConfig(level=logging.DEBUG)
-        self.model.train(self.coco_dataset_train, epoch=200, batch_size=8)
+        self.model.train(self.dataset, epoch=200, batch_size=4,
+                         optimizer=optimizers.Adam(0.001))
 
 
 if __name__ == '__main__':

@@ -9,6 +9,7 @@ from tensorflow.keras import layers, Model, optimizers
 from tqdm import tqdm
 
 from utils.bbox import match_bbox, apply_anchor_box
+from data_loaders.ssd import SSDDataLoader
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,7 @@ class SSDObjectDetectionModel:
 
         self._prior_box, self._model = self._build()
 
+        # self._optimizer = optimizers.Adam(learning_rate=learning_rate)
         self._optimizer = optimizers.Adam(learning_rate=learning_rate)
 
     def _build(self):
@@ -203,32 +205,82 @@ class SSDObjectDetectionModel:
                  tf.TensorSpec(np.shape(self._prior_box), dtype=tf.float32),
                  tf.TensorSpec((np.shape(self._prior_box)[0],), dtype=tf.bool))
             )
-        ).batch(batch_size, drop_remainder=True)
+        ).batch(batch_size, drop_remainder=True).prefetch(1)
 
         return batch_dataset
 
-    def train(self, dataset, epoch=1, batch_size=1):
+    def _train_step(self, image, gt_cls, gt_box, gt_mask, ssd_optimizer, step=0):
+        with tf.GradientTape() as tape:
+            pred_loc, pred_conf = self._model(image, training=True)
+            total_loss = self._ssd_loss((gt_cls, gt_box, gt_mask), (pred_loc, pred_conf))
 
-        batch_dataset = self.get_train_set(dataset, batch_size)
+        ssd_gradient = tape.gradient(total_loss, self._model.trainable_variables)
+        ssd_gradient = [tf.clip_by_norm(x, 0.1) for x in ssd_gradient]
+        ssd_optimizer.apply_gradients(
+            zip(ssd_gradient, self._model.trainable_variables)
+        )
+
+        return pred_conf, pred_loc
+
+    def train(self, data_loader: SSDDataLoader,
+              epoch=1, batch_size=1, optimizer=None,
+              warmup=True, warmup_step=500, warmup_lr=(0.00001, 0.001)):
+
+        train_set, val_set = data_loader.get_dataset()
+        set_names, set_colors = data_loader.get_names_and_colors()
+        batch_dataset = self.get_train_set(train_set, batch_size)
+
+        if optimizer is not None:
+            self._optimizer = optimizer
+            self._optimizer: tf.optimizers.Optimizer
+
+        if warmup:
+            step = 0
+            warmup_optimizer = optimizers.Adam()
+            while True:
+                for image, (gt_cls, gt_bbox, gt_mask) in batch_dataset:
+                    step += 1
+                    learning_rate = step * (warmup_lr[1] - warmup_lr[0]) / warmup_step + warmup_lr[0]
+                    warmup_optimizer.lr = learning_rate
+                    logger.debug("Warm up with learning rate %s", learning_rate)
+                    pred_conf, pred_loc = self._train_step(image, gt_cls, gt_bbox, gt_mask,
+                                                           warmup_optimizer)
+
+                    if step % 10 == 0:
+                        self.visualize(image, pred_conf, pred_loc,
+                                       name="ssd_pred", thresh=0.5, show=True,
+                                       label_names=set_names, label_colors=set_colors)
+                        self.visualize(image, pred_conf, pred_loc,
+                                       name="ssd_pred_with_mask", thresh=0.5, show=True, mask=gt_mask,
+                                       label_names=set_names, label_colors=set_colors)
+                        self.visualize_dataset(image, gt_cls, gt_bbox, gt_mask,
+                                               name="ssd_gt", show=True,
+                                               label_names=set_names, label_colors=set_colors)
+
+                    if step >= warmup_step:
+                        break
+                if step >= warmup_step:
+                    break
 
         for i in range(epoch):
             logger.info("Epoch %s/%s", i + 1, epoch)
-            for image, (ground_truth_cls, ground_truth_box, mask) in batch_dataset:
-                with tf.GradientTape() as tape:
-                    # print("==========train step start==========")
-                    pred_loc, pred_conf = self._model(image, training=True)
-                    total_loss = self._ssd_loss((ground_truth_cls, ground_truth_box, mask), (pred_loc, pred_conf))
-                    # print("==========train step end==========")
+            for step, (image, (gt_cls, gt_bbox, gt_mask)) in enumerate(batch_dataset):
+                pred_conf, pred_loc = self._train_step(image, gt_cls, gt_bbox, gt_mask, self._optimizer)
 
-                ssd_gradient = tape.gradient(total_loss, self._model.trainable_variables)
-                self._optimizer.apply_gradients(
-                    zip(ssd_gradient, self._model.trainable_variables)
-                )
-                self.visualize(image, pred_conf, pred_loc, name="predict", thresh=0.7, show=True)
-                self.visualize(image, pred_conf, pred_loc, name="predict_with_mask", thresh=0.1, show=True, mask=mask)
-                self.visualize_dataset(image, ground_truth_cls, ground_truth_box, mask, name="ground truth", show=True)
+                if step % 10 == 0:
+                    self.visualize(image, pred_conf, pred_loc,
+                                   name="ssd_pred", thresh=0.5, show=True,
+                                   label_names=set_names, label_colors=set_colors)
+                    self.visualize(image, pred_conf, pred_loc,
+                                   name="ssd_pred_with_mask", thresh=0.5, show=True, mask=gt_mask,
+                                   label_names=set_names, label_colors=set_colors)
+                    self.visualize_dataset(image, gt_cls, gt_bbox, gt_mask,
+                                           name="ssd_gt", show=True,
+                                           label_names=set_names, label_colors=set_colors)
 
-                # logger.debug("SSD Training loss: %s", total_loss.numpy())
+        cv2.destroyWindow("ssd_pred")
+        cv2.destroyWindow("ssd_pred_with_mask")
+        cv2.destroyWindow("ssd_gt")
 
     @staticmethod
     def _ssd_loss(y_true, y_pred):
@@ -310,8 +362,9 @@ class SSDObjectDetectionModel:
                 (255, 255, 255)
             )
 
-    def visualize_dataset(self, image, gt_cls, gt_bbox, mask, name="ssd visualize", show=False):
-        image = np.array(image.numpy()) / 2 + 0.5
+    def visualize_dataset(self, image, gt_cls, gt_bbox, mask,
+                          name="ssd visualize", show=False, label_names=None, label_colors=None):
+        image = np.array(((image / 2 + 0.5) * 255).numpy(), dtype=np.uint8)
         gt_bbox, gt_cls = np.array(gt_bbox.numpy()), np.array(gt_cls.numpy())
         mask = np.array(mask)
 
@@ -324,14 +377,18 @@ class SSDObjectDetectionModel:
         gt_bbox_masked = gt_bbox[mask]
         gt_cls_masked = gt_cls[mask]
         default_box_masked = self._prior_box[mask]
-
         for cls, bbox, default_box in zip(gt_cls_masked, gt_bbox_masked, default_box_masked):
             # print(cls, bbox)
             cx, cy = (bbox[:2] * default_box[2:] + default_box[:2]) * 300
             w, h = np.exp(bbox[2:]) * default_box[2:] * 300
             # print(image, cx, cy, w, h)
             cv2.rectangle(image, (int(cx - w / 2), int(cy - h / 2)), (int(cx + w / 2), int(cy + h / 2)),
-                          (1.0, 1.0, 1.0))
+                          label_colors[int(cls)])
+            if label_names is not None and label_colors is not None:
+                # print(cls)
+                cv2.putText(image, label_names[int(cls)], (int(cx - w / 2), int(cy - h / 2) - 5),
+                            cv2.FONT_HERSHEY_COMPLEX, 0.5,
+                            label_colors[int(cls)], 1)
 
         if show:
             cv2.imshow(name, image)
@@ -339,10 +396,16 @@ class SSDObjectDetectionModel:
 
         return image
 
-    def visualize(self, image, pred_conf, pred_bbox, thresh=0.5, name="ssd visualize", show=False, mask=None):
+    def visualize(self, image, pred_conf, pred_bbox,
+                  thresh=0.5, name="ssd visualize", show=False, mask=None, label_names=None, label_colors=None):
         pred_bbox = tf.tanh(pred_bbox)
         pred_conf = tf.nn.softmax(pred_conf)
         if mask is None:
             mask = tf.reduce_max(pred_conf[..., :-1], axis=-1) > thresh
+            mask_bg = pred_conf[..., -1] > thresh
+            mask = tf.logical_and(mask, tf.logical_not(mask_bg))
+        else:
+            pred_conf = pred_conf[..., :-1]
         pred_cls = tf.argmax(pred_conf, axis=-1)
-        return self.visualize_dataset(image, pred_cls, pred_bbox, mask, name=name, show=show)
+        return self.visualize_dataset(image, pred_cls, pred_bbox, mask, name=name, show=show,
+                                      label_names=label_names, label_colors=label_colors)

@@ -12,7 +12,7 @@ from ..coco.make_dataset import COCODataLoader, coco_names, coco_colors
 logger = logging.getLogger(__name__)
 
 
-class SSDDataset:
+class SSDDataLoader:
 
     def __init__(self,
                  dataset_root,
@@ -25,6 +25,8 @@ class SSDDataset:
             self._data_source_train, self._data_source_val = COCODataLoader(dataset_root=dataset_root,
                                                                             prefetch=1).get_dataset()
             self._transfer = self._coco2ssd
+            self._names = coco_names
+            self._colors = coco_colors
         else:
             raise ValueError
 
@@ -66,6 +68,9 @@ class SSDDataset:
     def get_dataset(self):
         return self._train_set, self._val_set
 
+    def get_names_and_colors(self):
+        return self._names, self._colors
+
     def draw_bbox(self, batch_data):
         image, cls, box = batch_data
         image = image.numpy()
@@ -77,13 +82,13 @@ class SSDDataset:
         w_scale, h_scale = self._train_resize
         box *= (w_scale, h_scale, w_scale, h_scale)
 
-        return draw_bbox(image, box, cls, coco_names, coco_colors)
+        return draw_bbox(image, box, cls, self._names, self._colors)
 
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)
-    loader = SSDDataset("../../datasets/coco",
-                        shuffle_buffer=1)
+    loader = SSDDataLoader("../../datasets/coco",
+                           shuffle_buffer=1)
 
     for my_image, my_cls, my_box in tqdm(loader.get_dataset()[1]):
         print(my_cls, my_box)

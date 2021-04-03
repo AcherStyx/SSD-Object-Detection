@@ -1,3 +1,3 @@
-from .make_dataset import SSDDataset
+from .make_dataset import SSDDataLoader
 
-__all__ = ["SSDDataset"]
+__all__ = ["SSDDataLoader"]
