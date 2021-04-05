@@ -45,9 +45,11 @@ class TestSSDObjectDetectionModel(unittest.TestCase):
         self.model.visualize_prior_box()
 
     def test_train(self):
-        logging.basicConfig(level=logging.DEBUG)
-        self.model.train(self.dataset, epoch=200, batch_size=4,
-                         optimizer=optimizers.Adam(0.001))
+        logging.basicConfig(level=logging.INFO)
+        # self.model.load()
+        self.model.train(self.dataset, epoch=20, batch_size=4,
+                         optimizer=optimizers.Adam(0.0001), warmup=True)
+        self.model.save()
 
 
 if __name__ == '__main__':

@@ -1,6 +1,7 @@
 # project
 datasets
 *.png
+*.h5
 
 # pycharm
 .idea
