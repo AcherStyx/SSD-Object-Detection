@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 class SSDObjectDetectionModel:
     def __init__(self,
                  classes,
+                 log_dir=None,
                  learning_rate=0.001):
         self.INPUT_SHAPE = (300, 300, 3)
         self.CLASSES = classes + 1
@@ -28,11 +29,13 @@ class SSDObjectDetectionModel:
 
         self._prior_box, self._model = self._build()
 
-        # self._optimizer = optimizers.Adam(learning_rate=learning_rate)
         self._optimizer = optimizers.Adam(learning_rate=learning_rate)
+        if log_dir is not None:
+            self._tensorboard_writer = tf.summary.create_file_writer(log_dir)
+        else:
+            self._tensorboard_writer = None  # not use tensorboard
 
     def _build(self):
-
         args_3_512 = {"filters": 512,
                       "kernel_size": (3, 3),
                       "padding": "SAME",
@@ -215,7 +218,7 @@ class SSDObjectDetectionModel:
             total_loss, info = self._ssd_loss((gt_cls, gt_box, gt_mask), (pred_loc, pred_conf))
 
         ssd_gradient = tape.gradient(total_loss, self._model.trainable_variables)
-        ssd_gradient = [tf.clip_by_norm(x, 1.0) for x in ssd_gradient]
+        ssd_gradient = [tf.clip_by_norm(x, 0.01) for x in ssd_gradient]
         ssd_optimizer.apply_gradients(
             zip(ssd_gradient, self._model.trainable_variables)
         )
@@ -261,16 +264,25 @@ class SSDObjectDetectionModel:
                                                name="ssd_gt", show=True,
                                                label_names=set_names, label_colors=set_colors)
 
+                    if self._tensorboard_writer is not None:
+                        with self._tensorboard_writer.as_default():
+                            tf.summary.scalar("warmup/loc loss", info["loc loss"], step=step)
+                            tf.summary.scalar("warmup/cls loss pos", info["cls loss pos"], step=step)
+                            tf.summary.scalar("warmup/cls loss neg", info["cls loss neg"], step=step)
+                            tf.summary.scalar("warmup/lr", info["lr"], step=step)
+
                     if step >= warmup_step:
                         break
                 if step >= warmup_step:
                     bar.close()
                     break
 
+        step = 0
         for i in range(epoch):
             logger.info("Epoch %s/%s", i + 1, epoch)
             bar = tqdm()
-            for step, (image, (gt_cls, gt_bbox, gt_mask)) in enumerate(batch_dataset):
+            for image, (gt_cls, gt_bbox, gt_mask) in batch_dataset:
+                step += 1
                 pred_conf, pred_loc, info = self._train_step(image, gt_cls, gt_bbox, gt_mask, self._optimizer)
 
                 info["lr"] = self._optimizer.lr.numpy()
@@ -287,6 +299,13 @@ class SSDObjectDetectionModel:
                     self.visualize_dataset(image, gt_cls, gt_bbox, gt_mask,
                                            name="ssd_gt", show=True,
                                            label_names=set_names, label_colors=set_colors)
+
+                if self._tensorboard_writer is not None:
+                    with self._tensorboard_writer.as_default():
+                        tf.summary.scalar("train/loc loss", info["loc loss"], step=step)
+                        tf.summary.scalar("train/cls loss pos", info["cls loss pos"], step=step)
+                        tf.summary.scalar("train/cls loss neg", info["cls loss neg"], step=step)
+                        tf.summary.scalar("train/lr", info["lr"], step=step)
             bar.close()
 
         cv2.destroyWindow("ssd_pred")
@@ -330,7 +349,7 @@ class SSDObjectDetectionModel:
         # generate final negative mask
         bool_negative_mask = loss_cls_neg_without_mining >= mining_top_k_min
         float_negative_mask = tf.cast(bool_negative_mask, tf.float32)
-        assert tf.reduce_sum(float_negative_mask) == tf.reduce_sum(float_positive_mask) * 3
+        # assert tf.reduce_sum(float_negative_mask) == tf.reduce_sum(float_positive_mask) * 3 # not always work
         assert tf.reduce_sum(tf.cast(tf.logical_and(bool_positive_mask, bool_negative_mask), tf.float32)) == 0.0
 
         # cls loss negative
