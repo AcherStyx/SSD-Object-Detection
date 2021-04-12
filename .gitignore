@@ -2,6 +2,7 @@
 datasets
 *.png
 *.h5
+workshop
 
 # pycharm
 .idea

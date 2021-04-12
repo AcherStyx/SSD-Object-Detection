@@ -1,9 +1,11 @@
 import logging
 import itertools
+import os
+import time
+import math
 
 import cv2
 import tensorflow as tf
-import math
 import numpy as np
 from tensorflow.keras import layers, Model, optimizers, activations
 from tqdm import tqdm
@@ -19,19 +21,31 @@ class SSDObjectDetectionModel:
                  classes,
                  log_dir=None,
                  learning_rate=0.001):
-        self.INPUT_SHAPE = (300, 300, 3)
-        self.CLASSES = classes + 1
-        self.THRESH = 0.5
+        self._INPUT_SHAPE = (300, 300, 3)
+        self._CLASSES = classes + 1
+        self._THRESH = 0.5
 
-        self.FILTER_SIZE_1 = 4 * (self.CLASSES + 4)
-        self.FILTER_SIZE_2 = 6 * (self.CLASSES + 4)
-        self.SAMPLE_SIZE = (self.CLASSES + 4)
+        self._FILTER_SIZE_1 = 4 * (self._CLASSES + 4)
+        self._FILTER_SIZE_2 = 6 * (self._CLASSES + 4)
+        self._SAMPLE_SIZE = (self._CLASSES + 4)
 
         self._prior_box, self._model = self._build()
 
         self._optimizer = optimizers.Adam(learning_rate=learning_rate)
         if log_dir is not None:
+            time_stamp = time.strftime("%Y-%m-%d-%H%M%S", time.localtime())
+            log_dir = os.path.join(log_dir, time_stamp)
             self._tensorboard_writer = tf.summary.create_file_writer(log_dir)
+
+            # write graph
+            @tf.function
+            def trace_model(data, model):
+                model(data)
+
+            tf.summary.trace_on(graph=True)
+            trace_model(tf.zeros((1, 300, 300, 3)), self._model)
+            with self._tensorboard_writer.as_default():
+                tf.summary.trace_export("SSD Model", step=0)
         else:
             self._tensorboard_writer = None  # not use tensorboard
 
@@ -51,7 +65,8 @@ class SSDObjectDetectionModel:
         model = tf.keras.applications.VGG16(include_top=False, input_shape=(300, 300, 3))
         pre_trained_vgg = Model(inputs=model.input,
                                 outputs=model.get_layer("block3_conv3").output,
-                                trainable=False
+                                trainable=False,
+                                name="pre-trained-vgg"
                                 )(input_layer)
 
         hidden_layer = layers.MaxPool2D(**args_pool)(pre_trained_vgg)
@@ -110,27 +125,27 @@ class SSDObjectDetectionModel:
                                       activation="relu")(hidden_layer)
 
         # detection result
-        detection_1 = layers.Conv2D(filters=self.FILTER_SIZE_1,
+        detection_1 = layers.Conv2D(filters=self._FILTER_SIZE_1,
                                     kernel_size=(3, 3),
                                     activation=None,
                                     padding="SAME")(feature_map_1)
-        detection_2 = layers.Conv2D(filters=self.FILTER_SIZE_2,
+        detection_2 = layers.Conv2D(filters=self._FILTER_SIZE_2,
                                     kernel_size=(3, 3),
                                     activation=None,
                                     padding="SAME")(feature_map_2)
-        detection_3 = layers.Conv2D(filters=self.FILTER_SIZE_2,
+        detection_3 = layers.Conv2D(filters=self._FILTER_SIZE_2,
                                     kernel_size=(3, 3),
                                     activation=None,
                                     padding="SAME")(feature_map_3)
-        detection_4 = layers.Conv2D(filters=self.FILTER_SIZE_2,
+        detection_4 = layers.Conv2D(filters=self._FILTER_SIZE_2,
                                     kernel_size=(3, 3),
                                     activation=None,
                                     padding="SAME")(feature_map_4)
-        detection_5 = layers.Conv2D(filters=self.FILTER_SIZE_1,
+        detection_5 = layers.Conv2D(filters=self._FILTER_SIZE_1,
                                     kernel_size=(3, 3),
                                     activation=None,
                                     padding="SAME")(feature_map_5)
-        detection_6 = layers.Conv2D(filters=self.FILTER_SIZE_1,
+        detection_6 = layers.Conv2D(filters=self._FILTER_SIZE_1,
                                     kernel_size=(3, 3),
                                     activation=None,
                                     padding="SAME")(feature_map_6)
@@ -140,12 +155,12 @@ class SSDObjectDetectionModel:
                        detection_4.shape[1:3], detection_5.shape[1:3], detection_6.shape[1:3]]
         )
 
-        detection_1 = layers.Reshape(target_shape=(-1, self.CLASSES + 4))(detection_1)
-        detection_2 = layers.Reshape(target_shape=(-1, self.CLASSES + 4))(detection_2)
-        detection_3 = layers.Reshape(target_shape=(-1, self.CLASSES + 4))(detection_3)
-        detection_4 = layers.Reshape(target_shape=(-1, self.CLASSES + 4))(detection_4)
-        detection_5 = layers.Reshape(target_shape=(-1, self.CLASSES + 4))(detection_5)
-        detection_6 = layers.Reshape(target_shape=(-1, self.CLASSES + 4))(detection_6)
+        detection_1 = layers.Reshape(target_shape=(-1, self._CLASSES + 4))(detection_1)
+        detection_2 = layers.Reshape(target_shape=(-1, self._CLASSES + 4))(detection_2)
+        detection_3 = layers.Reshape(target_shape=(-1, self._CLASSES + 4))(detection_3)
+        detection_4 = layers.Reshape(target_shape=(-1, self._CLASSES + 4))(detection_4)
+        detection_5 = layers.Reshape(target_shape=(-1, self._CLASSES + 4))(detection_5)
+        detection_6 = layers.Reshape(target_shape=(-1, self._CLASSES + 4))(detection_6)
         output_layer = layers.Concatenate(axis=-2)([detection_1, detection_2, detection_3,
                                                     detection_4, detection_5, detection_6])
 
@@ -167,10 +182,10 @@ class SSDObjectDetectionModel:
                 cy = (y + 0.5) / h
 
                 # TODO: use calculate result
-                s_k = s_k_refer[index] / self.INPUT_SHAPE[0]
+                s_k = s_k_refer[index] / self._INPUT_SHAPE[0]
                 prior_box.append([cx, cy, s_k, s_k])
 
-                s_k_prime = math.sqrt(s_k * (s_k_refer[index + 1] / self.INPUT_SHAPE[0]))
+                s_k_prime = math.sqrt(s_k * (s_k_refer[index + 1] / self._INPUT_SHAPE[0]))
                 prior_box.append([cx, cy, s_k_prime, s_k_prime])
 
                 for ratio in aspect_ratio[index]:
@@ -201,9 +216,9 @@ class SSDObjectDetectionModel:
                 yield iter_image, (matched_cls, matched_loc, matched_mask)
 
         batch_dataset = tf.data.Dataset.from_generator(
-            generator=lambda: batch_data_iter(dataset, self._prior_box, self.THRESH),
+            generator=lambda: batch_data_iter(dataset, self._prior_box, self._THRESH),
             output_signature=(
-                tf.TensorSpec(self.INPUT_SHAPE, dtype=tf.float32),
+                tf.TensorSpec(self._INPUT_SHAPE, dtype=tf.float32),
                 (tf.TensorSpec((np.shape(self._prior_box)[0],), dtype=tf.int32),
                  tf.TensorSpec(np.shape(self._prior_box), dtype=tf.float32),
                  tf.TensorSpec((np.shape(self._prior_box)[0],), dtype=tf.bool))
@@ -212,22 +227,42 @@ class SSDObjectDetectionModel:
 
         return batch_dataset
 
-    def _train_step(self, image, gt_cls, gt_box, gt_mask, ssd_optimizer, step=0):
+    def _train_step(self, image, gt_cls, gt_bbox, gt_mask, ssd_optimizer, stage, set_names, set_colors, step):
         with tf.GradientTape() as tape:
             pred_loc, pred_conf = self._model(image, training=True)
-            total_loss, info = self._ssd_loss((gt_cls, gt_box, gt_mask), (pred_loc, pred_conf))
-
+            total_loss, info = self._ssd_loss((gt_cls, gt_bbox, gt_mask), (pred_loc, pred_conf))
         ssd_gradient = tape.gradient(total_loss, self._model.trainable_variables)
         ssd_gradient = [tf.clip_by_norm(x, 0.01) for x in ssd_gradient]
         ssd_optimizer.apply_gradients(
             zip(ssd_gradient, self._model.trainable_variables)
         )
 
+        info["lr"] = ssd_optimizer.lr.numpy()
+        if step % 10 == 0:
+            img_ssd_pred = self.visualize(image, pred_conf, pred_loc,
+                                          name="ssd_pred", thresh=0.3, show=False,
+                                          label_names=set_names, label_colors=set_colors)
+            img_pred_with_mask = self.visualize(image, pred_conf, pred_loc,
+                                                name="ssd_pred_with_mask", thresh=0.3, show=False,
+                                                mask=gt_mask,
+                                                label_names=set_names, label_colors=set_colors)
+            img_ssd_gt = self.visualize_dataset(image, gt_cls, gt_bbox, gt_mask,
+                                                name="ssd_gt", show=False,
+                                                label_names=set_names, label_colors=set_colors)
+            tf.summary.image(stage + "/pred", np.expand_dims(img_ssd_pred, axis=0), step=step)
+            tf.summary.image(stage + "/pred_with_mask", np.expand_dims(img_pred_with_mask, axis=0), step=step)
+            tf.summary.image(stage + "/gt", np.expand_dims(img_ssd_gt, axis=0), step=step)
+
+        tf.summary.scalar(stage + "/loc loss", info["loc loss"], step=step)
+        tf.summary.scalar(stage + "/cls loss pos", info["cls loss pos"], step=step)
+        tf.summary.scalar(stage + "/cls loss neg", info["cls loss neg"], step=step)
+        tf.summary.scalar(stage + "/lr", info["lr"], step=step)
+
         return pred_conf, pred_loc, info
 
-    def train(self, data_loader: SSDDataLoader,
-              epoch=1, batch_size=1, optimizer=None,
-              warmup=True, warmup_step=500, warmup_lr=(0.000001, 0.0001)):
+    def _train(self, data_loader: SSDDataLoader,
+               epoch, batch_size, optimizer,
+               warmup, warmup_step, warmup_lr):
 
         train_set, val_set = data_loader.get_dataset()
         set_names, set_colors = data_loader.get_names_and_colors()
@@ -249,27 +284,9 @@ class SSDObjectDetectionModel:
                     learning_rate = step * (warmup_lr[1] - warmup_lr[0]) / warmup_step + warmup_lr[0]
                     warmup_optimizer.lr = learning_rate
                     logger.debug("Warm up with learning rate %s", learning_rate)
-                    pred_conf, pred_loc, info = self._train_step(image, gt_cls, gt_bbox, gt_mask,
-                                                                 warmup_optimizer)
-                    info["lr"] = learning_rate
+                    pred_conf, pred_loc, info = self._train_step(image, gt_cls, gt_bbox, gt_mask, warmup_optimizer,
+                                                                 "warmup", set_names, set_colors, step)
                     bar.set_postfix(info)
-                    if step % 10 == 0:
-                        self.visualize(image, pred_conf, pred_loc,
-                                       name="ssd_pred", thresh=0.3, show=True,
-                                       label_names=set_names, label_colors=set_colors)
-                        self.visualize(image, pred_conf, pred_loc,
-                                       name="ssd_pred_with_mask", thresh=0.3, show=True, mask=gt_mask,
-                                       label_names=set_names, label_colors=set_colors)
-                        self.visualize_dataset(image, gt_cls, gt_bbox, gt_mask,
-                                               name="ssd_gt", show=True,
-                                               label_names=set_names, label_colors=set_colors)
-
-                    if self._tensorboard_writer is not None:
-                        with self._tensorboard_writer.as_default():
-                            tf.summary.scalar("warmup/loc loss", info["loc loss"], step=step)
-                            tf.summary.scalar("warmup/cls loss pos", info["cls loss pos"], step=step)
-                            tf.summary.scalar("warmup/cls loss neg", info["cls loss neg"], step=step)
-                            tf.summary.scalar("warmup/lr", info["lr"], step=step)
 
                     if step >= warmup_step:
                         break
@@ -283,34 +300,20 @@ class SSDObjectDetectionModel:
             bar = tqdm()
             for image, (gt_cls, gt_bbox, gt_mask) in batch_dataset:
                 step += 1
-                pred_conf, pred_loc, info = self._train_step(image, gt_cls, gt_bbox, gt_mask, self._optimizer)
-
-                info["lr"] = self._optimizer.lr.numpy()
+                pred_conf, pred_loc, info = self._train_step(image, gt_cls, gt_bbox, gt_mask, self._optimizer,
+                                                             "train", set_names, set_colors, step)
                 bar.update(1)
                 bar.set_postfix(info)
-
-                if step % 10 == 0:
-                    self.visualize(image, pred_conf, pred_loc,
-                                   name="ssd_pred", thresh=0.3, show=True,
-                                   label_names=set_names, label_colors=set_colors)
-                    self.visualize(image, pred_conf, pred_loc,
-                                   name="ssd_pred_with_mask", thresh=0.3, show=True, mask=gt_mask,
-                                   label_names=set_names, label_colors=set_colors)
-                    self.visualize_dataset(image, gt_cls, gt_bbox, gt_mask,
-                                           name="ssd_gt", show=True,
-                                           label_names=set_names, label_colors=set_colors)
-
-                if self._tensorboard_writer is not None:
-                    with self._tensorboard_writer.as_default():
-                        tf.summary.scalar("train/loc loss", info["loc loss"], step=step)
-                        tf.summary.scalar("train/cls loss pos", info["cls loss pos"], step=step)
-                        tf.summary.scalar("train/cls loss neg", info["cls loss neg"], step=step)
-                        tf.summary.scalar("train/lr", info["lr"], step=step)
             bar.close()
 
-        cv2.destroyWindow("ssd_pred")
-        cv2.destroyWindow("ssd_pred_with_mask")
-        cv2.destroyWindow("ssd_gt")
+    def train(self, data_loader: SSDDataLoader,
+              epoch=1, batch_size=1, optimizer=None,
+              warmup=True, warmup_step=1000, warmup_lr=(0.000001, 0.001)):
+        if self._tensorboard_writer is not None:
+            with self._tensorboard_writer.as_default():
+                self._train(data_loader, epoch, batch_size, optimizer, warmup, warmup_step, warmup_lr)
+        else:
+            self._train(data_loader, epoch, batch_size, optimizer, warmup, warmup_step, warmup_lr)
 
     @staticmethod
     def _ssd_loss(y_true, y_pred):
@@ -358,8 +361,9 @@ class SSDObjectDetectionModel:
         ) / batch_size
 
         # loc loss
+        float_gt_mask = tf.cast(gt_mask, tf.float32)
         loss_box = tf.reduce_sum(
-            tf.abs(tf.boolean_mask(pred_box, gt_mask) - tf.boolean_mask(gt_box, gt_mask))
+            tf.reduce_sum(tf.abs(pred_box - gt_box), axis=-1) * float_gt_mask
         ) / batch_size
 
         # logger.debug("masked box gt: %s", tf.boolean_mask(gt_box, gt_mask)[0])
@@ -371,9 +375,9 @@ class SSDObjectDetectionModel:
                      loss_box.numpy(), loss_cls_pos.numpy(), loss_cls_negative.numpy(),
                      (loss_box + loss_cls_pos + loss_cls_negative).numpy())
 
-        loss_info = {"loc loss": loss_box.numpy(),
-                     "cls loss pos": loss_cls_pos.numpy(),
-                     "cls loss neg": loss_cls_negative.numpy()}
+        loss_info = {"cls loss pos": (batch_size * loss_cls_pos / tf.reduce_sum(float_positive_mask)).numpy(),
+                     "cls loss neg": (batch_size * loss_cls_negative / tf.reduce_sum(float_negative_mask)).numpy(),
+                     "loc loss": (batch_size * loss_box / tf.reduce_sum(float_gt_mask)).numpy()}
 
         return loss_box + loss_cls_pos + loss_cls_negative, loss_info
 
@@ -414,8 +418,8 @@ class SSDObjectDetectionModel:
 
             cv2.rectangle(
                 image,
-                (int((cx - w / 2) * self.INPUT_SHAPE[1]), int((cy - h / 2) * self.INPUT_SHAPE[0])),
-                (int((cx + w / 2) * self.INPUT_SHAPE[1]), int((cy + h / 2) * self.INPUT_SHAPE[0])),
+                (int((cx - w / 2) * self._INPUT_SHAPE[1]), int((cy - h / 2) * self._INPUT_SHAPE[0])),
+                (int((cx + w / 2) * self._INPUT_SHAPE[1]), int((cy + h / 2) * self._INPUT_SHAPE[0])),
                 (255, 255, 255)
             )
 

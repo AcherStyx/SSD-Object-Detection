@@ -7,18 +7,20 @@ from models.ssd_model import *
 
 class TestSSDObjectDetectionModel(unittest.TestCase):
     def __init__(self, *args, **kwargs):
-        self.model = SSDObjectDetectionModel(classes=80, learning_rate=0.001,log_dir="../../workshop/ssd")
-        self.model.show_summary()
-
-        self.dummy_input = tf.random.normal([5, 300, 300, 3])
-        self.dummy_output = self.model.get_tf_model()(self.dummy_input)
 
         try:
             self.dataset = SSDDataLoader("./datasets/coco")
             self.coco_dataset_train, self.coco_dataset_val = self.dataset.get_dataset()
+            self.model = SSDObjectDetectionModel(classes=80, learning_rate=0.001, log_dir="./workshop/ssd")
+            self.model.show_summary()
         except ValueError:
             self.dataset = SSDDataLoader("../../datasets/coco")
             self.coco_dataset_train, self.coco_dataset_val = self.dataset.get_dataset()
+            self.model = SSDObjectDetectionModel(classes=80, learning_rate=0.001, log_dir="../../workshop/ssd")
+            self.model.show_summary()
+
+        self.dummy_input = tf.random.normal([5, 300, 300, 3])
+        self.dummy_output = self.model.get_tf_model()(self.dummy_input)
 
         super().__init__(*args, **kwargs)
 
@@ -47,8 +49,9 @@ class TestSSDObjectDetectionModel(unittest.TestCase):
     def test_train(self):
         logging.basicConfig(level=logging.INFO)
         # self.model.load()
-        self.model.train(self.dataset, epoch=50, batch_size=12,
-                         optimizer=optimizers.Adam(0.0001), warmup=True)
+        self.model.train(self.dataset, epoch=100, batch_size=8,
+                         optimizer=optimizers.Adam(0.0001),
+                         warmup=True, warmup_step=100)
         self.model.save()
 
 
