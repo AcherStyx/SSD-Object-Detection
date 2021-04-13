@@ -26,7 +26,7 @@ coco_names = [
     "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"
 ]
 
-coco_colors = [np.random.randint(50, 200, (3,), dtype=np.uint8).tolist() for _ in range(len(coco_names))]
+coco_colors = [np.random.randint(80, 240, (3,), dtype=np.uint8).tolist() for _ in range(len(coco_names))]
 
 
 class COCODataLoader:

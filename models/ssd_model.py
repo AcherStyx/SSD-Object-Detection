@@ -10,7 +10,7 @@ import numpy as np
 from tensorflow.keras import layers, Model, optimizers, activations
 from tqdm import tqdm
 
-from utils.bbox import match_bbox, apply_anchor_box
+from utils.bbox import match_bbox, apply_anchor_box, draw_bbox
 from data_loaders.ssd import SSDDataLoader
 
 logger = logging.getLogger(__name__)
@@ -19,8 +19,7 @@ logger = logging.getLogger(__name__)
 class SSDObjectDetectionModel:
     def __init__(self,
                  classes,
-                 log_dir=None,
-                 learning_rate=0.001):
+                 log_dir):
         self._INPUT_SHAPE = (300, 300, 3)
         self._CLASSES = classes + 1
         self._THRESH = 0.5
@@ -31,23 +30,20 @@ class SSDObjectDetectionModel:
 
         self._prior_box, self._model = self._build()
 
-        self._optimizer = optimizers.Adam(learning_rate=learning_rate)
-        if log_dir is not None:
-            time_stamp = time.strftime("%Y-%m-%d-%H%M%S", time.localtime())
-            log_dir = os.path.join(log_dir, time_stamp)
-            self._tensorboard_writer = tf.summary.create_file_writer(log_dir)
+        time_stamp = time.strftime("%Y-%m-%d-%H%M%S", time.localtime())
+        log_dir = os.path.join(log_dir, time_stamp)
+        self._log_dir = log_dir
+        self._tensorboard_writer = tf.summary.create_file_writer(os.path.join(log_dir, "tensorboard"))
 
-            # write graph
-            @tf.function
-            def trace_model(data, model):
-                model(data)
+        # write graph
+        @tf.function
+        def trace_model(data, model):
+            model(data)
 
-            tf.summary.trace_on(graph=True)
-            trace_model(tf.zeros((1, 300, 300, 3)), self._model)
-            with self._tensorboard_writer.as_default():
-                tf.summary.trace_export("SSD Model", step=0)
-        else:
-            self._tensorboard_writer = None  # not use tensorboard
+        tf.summary.trace_on(graph=True)
+        trace_model(tf.zeros((1, 300, 300, 3)), self._model)
+        with self._tensorboard_writer.as_default():
+            tf.summary.trace_export("SSD Model", step=0)
 
     def _build(self):
         args_3_512 = {"filters": 512,
@@ -237,7 +233,10 @@ class SSDObjectDetectionModel:
             zip(ssd_gradient, self._model.trainable_variables)
         )
 
-        info["lr"] = ssd_optimizer.lr.numpy()
+        try:
+            info["lr"] = ssd_optimizer.lr.numpy()
+        except AttributeError:
+            info["lr"] = ssd_optimizer.lr(step).numpy()
         if step % 10 == 0:
             img_ssd_pred = self.visualize(image, pred_conf, pred_loc,
                                           name="ssd_pred", thresh=0.3, show=False,
@@ -262,28 +261,20 @@ class SSDObjectDetectionModel:
 
     def _train(self, data_loader: SSDDataLoader,
                epoch, batch_size, optimizer,
-               warmup, warmup_step, warmup_lr):
+               warmup, warmup_optimizer, warmup_step):
 
         train_set, val_set = data_loader.get_dataset()
         set_names, set_colors = data_loader.get_names_and_colors()
         batch_dataset = self.get_train_set(train_set, batch_size)
 
-        if optimizer is not None:
-            self._optimizer = optimizer
-            self._optimizer: tf.optimizers.Optimizer
-
         if warmup:
-            logger.info("Warm up for %s steps, lr %s -> %s", warmup_step, warmup_lr[0], warmup_lr[1])
+            logger.info("Warm up for %s steps, lr %s -> %s", warmup_step)
             step = 0
-            warmup_optimizer = optimizers.SGD(momentum=0.9)
             bar = tqdm(total=warmup_step)
             while True:
                 for image, (gt_cls, gt_bbox, gt_mask) in batch_dataset:
                     bar.update(1)
                     step += 1
-                    learning_rate = step * (warmup_lr[1] - warmup_lr[0]) / warmup_step + warmup_lr[0]
-                    warmup_optimizer.lr = learning_rate
-                    logger.debug("Warm up with learning rate %s", learning_rate)
                     pred_conf, pred_loc, info = self._train_step(image, gt_cls, gt_bbox, gt_mask, warmup_optimizer,
                                                                  "warmup", set_names, set_colors, step)
                     bar.set_postfix(info)
@@ -300,27 +291,42 @@ class SSDObjectDetectionModel:
             bar = tqdm()
             for image, (gt_cls, gt_bbox, gt_mask) in batch_dataset:
                 step += 1
-                pred_conf, pred_loc, info = self._train_step(image, gt_cls, gt_bbox, gt_mask, self._optimizer,
+                pred_conf, pred_loc, info = self._train_step(image, gt_cls, gt_bbox, gt_mask, optimizer,
                                                              "train", set_names, set_colors, step)
                 bar.update(1)
                 bar.set_postfix(info)
             bar.close()
+            self.save(os.path.join(self._log_dir, "model_weight", "model_weight_epoch_" + str(i) + ".h5"))
 
     def train(self, data_loader: SSDDataLoader,
-              epoch=1, batch_size=1, optimizer=None,
-              warmup=True, warmup_step=1000, warmup_lr=(0.000001, 0.001)):
+              epoch, batch_size, optimizer,
+              warmup=True, warmup_optimizer=optimizers.Adam(optimizers.schedules.PolynomialDecay(1e-6, 500, 0.001)),
+              warmup_step=500):
+        """
+        train ssd model
+        @param data_loader: instance of SSDDataLoader
+        @param epoch:
+        @param batch_size:
+        @param optimizer: main optimizer for training model
+        @param warmup:
+        @param warmup_optimizer: optimizer with learning rate scheduler (see default config)
+        @param warmup_step:
+        """
+        if warmup is True:
+            assert warmup_optimizer is not None, "Define a warmup optimizer if you want to enable warmup!"
+
         if self._tensorboard_writer is not None:
             with self._tensorboard_writer.as_default():
-                self._train(data_loader, epoch, batch_size, optimizer, warmup, warmup_step, warmup_lr)
+                self._train(data_loader, epoch, batch_size, optimizer,
+                            warmup, warmup_optimizer, warmup_step)
         else:
-            self._train(data_loader, epoch, batch_size, optimizer, warmup, warmup_step, warmup_lr)
+            self._train(data_loader, epoch, batch_size, optimizer,
+                        warmup, warmup_optimizer, warmup_step)
 
     @staticmethod
     def _ssd_loss(y_true, y_pred):
         gt_cls, gt_box, gt_mask = y_true
         pred_box, pred_cls = y_pred
-
-        pred_box = tf.tanh(pred_box)
 
         # have same batch size
         assert tf.shape(gt_cls)[0] == tf.shape(gt_box)[0] == tf.shape(gt_mask)[0] == tf.shape(pred_box)[0] == \
@@ -329,14 +335,12 @@ class SSDObjectDetectionModel:
         assert tf.boolean_mask(pred_cls, tf.equal(gt_mask, tf.zeros_like(gt_mask, dtype=tf.bool))).shape[0] + \
                tf.boolean_mask(gt_cls, gt_mask).shape[0] == gt_cls.shape[0] * gt_cls.shape[1]
 
-        batch_size = tf.cast(tf.shape(gt_mask)[0], tf.float32)
-
         # cls loss positive
         bool_positive_mask = gt_mask
         float_positive_mask = tf.cast(bool_positive_mask, tf.float32)
         loss_cls_pos = tf.reduce_sum(
             tf.nn.sparse_softmax_cross_entropy_with_logits(gt_cls, pred_cls) * float_positive_mask
-        ) / batch_size
+        ) / tf.reduce_sum(float_positive_mask)
         num_positive = tf.reduce_sum(tf.cast(bool_positive_mask, tf.int32))
 
         # hard negative mining
@@ -358,26 +362,21 @@ class SSDObjectDetectionModel:
         # cls loss negative
         loss_cls_negative = tf.reduce_sum(
             loss_cls_neg_without_mining * float_negative_mask
-        ) / batch_size
+        ) / tf.reduce_sum(float_negative_mask)
 
         # loc loss
         float_gt_mask = tf.cast(gt_mask, tf.float32)
         loss_box = tf.reduce_sum(
             tf.reduce_sum(tf.abs(pred_box - gt_box), axis=-1) * float_gt_mask
-        ) / batch_size
-
-        # logger.debug("masked box gt: %s", tf.boolean_mask(gt_box, gt_mask)[0])
-        # logger.debug("masked box pred: %s", tf.boolean_mask(pred_box, gt_mask)[0])
-        # logger.debug("Label | Pred: %s",
-        #              tf.concat([tf.boolean_mask(gt_box, gt_mask), tf.boolean_mask(pred_box, gt_mask)], axis=-1))
+        ) / tf.reduce_sum(float_gt_mask)
 
         logger.debug("Loss function loc loss: %s | cls loss: %s | cls loss negative: %s | total loss: %s",
                      loss_box.numpy(), loss_cls_pos.numpy(), loss_cls_negative.numpy(),
                      (loss_box + loss_cls_pos + loss_cls_negative).numpy())
 
-        loss_info = {"cls loss pos": (batch_size * loss_cls_pos / tf.reduce_sum(float_positive_mask)).numpy(),
-                     "cls loss neg": (batch_size * loss_cls_negative / tf.reduce_sum(float_negative_mask)).numpy(),
-                     "loc loss": (batch_size * loss_box / tf.reduce_sum(float_gt_mask)).numpy()}
+        loss_info = {"cls loss pos": loss_cls_pos.numpy(),
+                     "cls loss neg": loss_cls_negative.numpy(),
+                     "loc loss": loss_box.numpy()}
 
         return loss_box + loss_cls_pos + loss_cls_negative, loss_info
 
@@ -440,22 +439,13 @@ class SSDObjectDetectionModel:
         gt_bbox_masked = gt_bbox[mask]
         gt_cls_masked = gt_cls[mask]
         default_box_masked = self._prior_box[mask]
-        if score is None:
-            score = np.ones_like(gt_cls_masked)
-        else:
+        if score is not None:
             score = np.array(score)[mask]
-        for s, cls, bbox, default_box in zip(score, gt_cls_masked, gt_bbox_masked, default_box_masked):
-            # print(cls, bbox)
-            cx, cy = (bbox[:2] * default_box[2:] + default_box[:2]) * 300
-            w, h = np.exp(bbox[2:]) * default_box[2:] * 300
-            # print(image, cx, cy, w, h)
-            cv2.rectangle(image, (int(cx - w / 2), int(cy - h / 2)), (int(cx + w / 2), int(cy + h / 2)),
-                          label_colors[int(cls)])
-            if label_names is not None and label_colors is not None:
-                # print(cls)
-                cv2.putText(image, str(label_names[int(cls)]) + " " + str(s), (int(cx - w / 2), int(cy - h / 2) - 5),
-                            cv2.FONT_HERSHEY_COMPLEX, 0.5,
-                            label_colors[int(cls)], 1)
+
+        gt_bbox_masked[:, :2] = (gt_bbox_masked[:, :2] * default_box_masked[:, 2:] + default_box_masked[:, :2]) * 300
+        gt_bbox_masked[:, 2:] = np.exp(gt_bbox_masked[:, 2:]) * default_box_masked[:, 2:] * 300
+
+        image = draw_bbox(image, gt_bbox_masked, gt_cls_masked, label_names, label_colors, score)
 
         if show:
             cv2.imshow(name, image)
@@ -465,7 +455,6 @@ class SSDObjectDetectionModel:
 
     def visualize(self, image, pred_conf, pred_bbox,
                   thresh=0.5, name="ssd visualize", show=False, mask=None, label_names=None, label_colors=None):
-        pred_bbox = tf.tanh(pred_bbox)
         pred_conf = tf.nn.softmax(pred_conf)
         pred_score = None
         if mask is None:
@@ -475,6 +464,7 @@ class SSDObjectDetectionModel:
             mask = tf.logical_and(mask, tf.logical_not(mask_bg))
         else:
             pred_conf = pred_conf[..., :-1]
+            pred_score = tf.reduce_max(pred_conf[..., :-1], axis=-1)
         pred_cls = tf.argmax(pred_conf, axis=-1)
         return self.visualize_dataset(image, pred_cls, pred_bbox, mask, score=pred_score,
                                       name=name, show=show, label_names=label_names, label_colors=label_colors)

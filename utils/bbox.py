@@ -102,17 +102,24 @@ def apply_anchor_box(origin_bbox, default_box):
     return np.concatenate([xy_relative, wh_relative], axis=-1)
 
 
-def draw_bbox(image, bbox, cls_label, cls_names, cls_color, show_names=True):
+def draw_bbox(image, bbox, cls_label, cls_names, cls_color, scores=None, show_names=True):
     """
     draw bounding box on image
     @param image: image in tf.Tensor, numpy array or python list
-    @param bbox: [[cx,cy,w,h],...] int value
+    @param bbox: [[cx,cy,w,h],...] int value, corresponding to pixel
     @param cls_label: [cls1,cls2,...]
     @param cls_names: [name1,name2,...]
     @param cls_color: [color1,color2,...]
+    @param scores:
     @param show_names:
     @return:
     """
+    # check length
+    if scores is not  None:
+        assert len(bbox) == len(cls_label) == len(scores)
+    else:
+        assert len(bbox) == len(cls_label)
+
     if isinstance(image, tf.Tensor):
         image = image.numpy()
     image_numpy = np.array(image)
@@ -121,13 +128,20 @@ def draw_bbox(image, bbox, cls_label, cls_names, cls_color, show_names=True):
     image_numpy = image_numpy.astype(np.uint8)
 
     image_numpy = cv2.cvtColor(image_numpy, cv2.COLOR_RGB2BGR)
-    for cat, (cx, cy, w, h) in zip(cls_label, bbox):
+    for index, (cat, (cx, cy, w, h)) in enumerate(zip(cls_label, bbox)):
         cv2.rectangle(image_numpy,
                       (int(cx - w / 2), int(cy - h / 2)), (int(cx + w / 2), int(cy + h / 2)),
                       cls_color[int(cat)], 2)
         if show_names:
-            cv2.putText(image_numpy, cls_names[int(cat)], (int(cx - w / 2), int(cy - h / 2) - 6),
-                        cv2.FONT_HERSHEY_COMPLEX, 0.6,
-                        cls_color[int(cat)], 2)
+            if scores is not None:
+                label_string = cls_names[int(cat)] + " " + str(scores[index])
+            else:
+                label_string = cls_names[int(cat)]
+            text_size = cv2.getTextSize(label_string, cv2.FONT_HERSHEY_COMPLEX, 0.5, 1)[0]
+            cv2.rectangle(image_numpy, (int(cx - w / 2) - 1, int(cy - h / 2) - text_size[1] - 2),
+                          (int(cx - w / 2) + text_size[0], int(cy - h / 2) - 1), cls_color[int(cat)], -1)
+            cv2.putText(image_numpy, label_string, (int(cx - w / 2), int(cy - h / 2) - 2),
+                        cv2.FONT_HERSHEY_COMPLEX, 0.5,
+                        (0, 0, 0), 1)
 
     return image_numpy
