@@ -5,3 +5,7 @@ matplotlib
 opencv-python
 numpy
 pycocotools
+tensorflow-gpu
+tqdm
+yaml
+pyyaml

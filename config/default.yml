@@ -1,0 +1,29 @@
+project:
+  name: "ssd"
+
+data:
+  dataset: "coco"
+  dataset_root: "../datasets/coco"
+  shuffle_buffer: 100
+  num_classes: 80
+
+model:
+  log_dir: "../workshop/10000_sample_test"
+  log_interval: 100
+  save: "model_last.h5"
+
+  train:
+    epoch: 5
+    batch_size: 4
+    optimizer: "Adam"
+    lr:
+      initial: 0.0005
+      decay_step: 100
+      decay_rate: 0.999
+
+  warmup:
+    enable: true
+    lr:
+      step: 1000
+      lr_start: 0.000001
+      lr_end: 0.0001

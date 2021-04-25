@@ -223,12 +223,13 @@ class SSDObjectDetectionModel:
 
         return batch_dataset
 
-    def _train_step(self, image, gt_cls, gt_bbox, gt_mask, ssd_optimizer, stage, set_names, set_colors, step):
+    def _train_step(self, image, gt_cls, gt_bbox, gt_mask, ssd_optimizer,
+                    stage, set_names, set_colors, step, log_interval):
         with tf.GradientTape() as tape:
             pred_loc, pred_conf = self._model(image, training=True)
             total_loss, info = self._ssd_loss((gt_cls, gt_bbox, gt_mask), (pred_loc, pred_conf))
         ssd_gradient = tape.gradient(total_loss, self._model.trainable_variables)
-        ssd_gradient = [tf.clip_by_norm(x, 0.01) for x in ssd_gradient]
+        ssd_gradient = [tf.clip_by_norm(x, 0.1) for x in ssd_gradient]
         ssd_optimizer.apply_gradients(
             zip(ssd_gradient, self._model.trainable_variables)
         )
@@ -237,7 +238,7 @@ class SSDObjectDetectionModel:
             info["lr"] = ssd_optimizer.lr.numpy()
         except AttributeError:
             info["lr"] = ssd_optimizer.lr(step).numpy()
-        if step % 10 == 0:
+        if step % log_interval == 0:
             img_ssd_pred = self.visualize(image, pred_conf, pred_loc,
                                           name="ssd_pred", thresh=0.3, show=False,
                                           label_names=set_names, label_colors=set_colors)
@@ -261,7 +262,7 @@ class SSDObjectDetectionModel:
 
     def _train(self, data_loader: SSDDataLoader,
                epoch, batch_size, optimizer,
-               warmup, warmup_optimizer, warmup_step):
+               warmup, warmup_optimizer, warmup_step, log_interval):
 
         train_set, val_set = data_loader.get_dataset()
         set_names, set_colors = data_loader.get_names_and_colors()
@@ -276,7 +277,7 @@ class SSDObjectDetectionModel:
                     bar.update(1)
                     step += 1
                     pred_conf, pred_loc, info = self._train_step(image, gt_cls, gt_bbox, gt_mask, warmup_optimizer,
-                                                                 "warmup", set_names, set_colors, step)
+                                                                 "warmup", set_names, set_colors, step, log_interval)
                     bar.set_postfix(info)
 
                     if step >= warmup_step:
@@ -292,7 +293,7 @@ class SSDObjectDetectionModel:
             for image, (gt_cls, gt_bbox, gt_mask) in batch_dataset:
                 step += 1
                 pred_conf, pred_loc, info = self._train_step(image, gt_cls, gt_bbox, gt_mask, optimizer,
-                                                             "train", set_names, set_colors, step)
+                                                             "train", set_names, set_colors, step, log_interval)
                 bar.update(1)
                 bar.set_postfix(info)
             bar.close()
@@ -300,8 +301,8 @@ class SSDObjectDetectionModel:
 
     def train(self, data_loader: SSDDataLoader,
               epoch, batch_size, optimizer,
-              warmup=True, warmup_optimizer=optimizers.Adam(optimizers.schedules.PolynomialDecay(1e-6, 500, 0.001)),
-              warmup_step=500):
+              warmup=True, warmup_optimizer=optimizers.Adam(optimizers.schedules.PolynomialDecay(1e-6, 1000, 0.001)),
+              warmup_step=1000, visualization_log_interval=10):
         """
         train ssd model
         @param data_loader: instance of SSDDataLoader
@@ -311,17 +312,23 @@ class SSDObjectDetectionModel:
         @param warmup:
         @param warmup_optimizer: optimizer with learning rate scheduler (see default config)
         @param warmup_step:
+        @param visualization_log_interval: write visualization result of detection to tensorboard
         """
         if warmup is True:
             assert warmup_optimizer is not None, "Define a warmup optimizer if you want to enable warmup!"
 
-        if self._tensorboard_writer is not None:
-            with self._tensorboard_writer.as_default():
+        try:
+            if self._tensorboard_writer is not None:
+                with self._tensorboard_writer.as_default():
+                    self._train(data_loader, epoch, batch_size, optimizer,
+                                warmup, warmup_optimizer, warmup_step, visualization_log_interval)
+            else:
                 self._train(data_loader, epoch, batch_size, optimizer,
-                            warmup, warmup_optimizer, warmup_step)
-        else:
-            self._train(data_loader, epoch, batch_size, optimizer,
-                        warmup, warmup_optimizer, warmup_step)
+                            warmup, warmup_optimizer, warmup_step, visualization_log_interval)
+        except Exception as e:
+            self.save("error_exit_save.h5")
+            logger.critical("Error occurred while training, last model weight is saved to 'error_exit_save.h5'")
+            raise e
 
     @staticmethod
     def _ssd_loss(y_true, y_pred):
@@ -400,6 +407,12 @@ class SSDObjectDetectionModel:
 
     def get_prior_box(self):
         return self._prior_box
+
+    def get_log_dir(self):
+        return self._log_dir
+
+    def get_log_writer(self) -> tf.summary.SummaryWriter:
+        return self._tensorboard_writer
 
     def visualize_prior_box(self, name="ssd visualize"):
         cx_pre = self._prior_box[0][0]

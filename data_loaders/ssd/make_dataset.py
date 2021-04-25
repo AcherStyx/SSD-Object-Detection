@@ -1,4 +1,4 @@
-__package__ = "data_loaders.ssd_adaptation"
+__package__ = "data_loaders.ssd"
 
 import cv2
 import numpy as np
@@ -17,11 +17,11 @@ class SSDDataLoader:
     def __init__(self,
                  dataset_root,
                  shuffle_buffer=1,
-                 dataset="COCO"):
+                 dataset="coco"):
         self._train_resize = (300, 300)
         self._shuffle_buffer = shuffle_buffer
 
-        if dataset == "COCO":
+        if dataset.lower() == "coco":
             self._data_source_train, self._data_source_val = COCODataLoader(dataset_root=dataset_root,
                                                                             prefetch=1).get_dataset()
             self._transfer = self._coco2ssd
