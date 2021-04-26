@@ -32,7 +32,14 @@ coco_colors = [np.random.randint(80, 240, (3,), dtype=np.uint8).tolist() for _ i
 class COCODataLoader:
     def __init__(self, dataset_root,
                  prefetch=1,
-                 shuffle=True):
+                 shuffle=True,
+                 mini_batch=0):
+        """
+        load object detection data from coco dataset
+        @param dataset_root: path to the dataset
+        @param prefetch:
+        @param shuffle: use shuffle
+        """
         self._PREFETCH = prefetch
         self._SHUFFLE = shuffle
 
@@ -40,6 +47,7 @@ class COCODataLoader:
         self._VAL_IMAGE = os.path.join(dataset_root, "val2017")
         self._TRAIN_ANNOTATION = os.path.join(dataset_root, "annotations", "instances_train2017.json")
         self._TRAIN_IMAGE = os.path.join(dataset_root, "train2017")
+        self._MINI_BATCH = mini_batch
 
         def check(file):
             if not os.path.exists(file):
@@ -97,10 +105,13 @@ class COCODataLoader:
         """
         img_ids = coco_instance.getImgIds()
         # TODO: remove debug setting
-        img_info = coco_instance.loadImgs(img_ids)
-        # img_info = coco_instance.loadImgs(img_ids)[:8]
+        if self._MINI_BATCH:
+            img_info = coco_instance.loadImgs(img_ids)[:int(self._MINI_BATCH)]
+        else:
+            img_info = coco_instance.loadImgs(img_ids)
         if self._SHUFFLE:
             np.random.shuffle(img_info)
+
         for img_desc in img_info:
             if image_root is not None:
                 image_raw = io.imread(os.path.join(image_root, img_desc['file_name'])) / 255
@@ -119,6 +130,7 @@ class COCODataLoader:
                 image_raw = np.stack([image_raw, image_raw, image_raw], axis=2)
 
             bbox[:, :2] += bbox[:, 2:] / 2
+
             yield image_raw, cls, bbox
 
     def load(self):

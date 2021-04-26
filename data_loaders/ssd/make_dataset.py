@@ -16,14 +16,16 @@ class SSDDataLoader:
 
     def __init__(self,
                  dataset_root,
-                 shuffle_buffer=1,
-                 dataset="coco"):
+                 dataset="coco",
+                 shuffle=True,
+                 mini_batch=0):
         self._train_resize = (300, 300)
-        self._shuffle_buffer = shuffle_buffer
 
         if dataset.lower() == "coco":
             self._data_source_train, self._data_source_val = COCODataLoader(dataset_root=dataset_root,
-                                                                            prefetch=1).get_dataset()
+                                                                            prefetch=1,
+                                                                            shuffle=shuffle,
+                                                                            mini_batch=mini_batch).get_dataset()
             self._transfer = self._coco2ssd
             self._names = coco_names
             self._colors = coco_colors
@@ -54,14 +56,14 @@ class SSDDataLoader:
                                                        tf.TensorSpec(shape=self._train_resize + (3,), dtype=tf.float32),
                                                        tf.TensorSpec(shape=(None,), dtype=tf.float32),
                                                        tf.TensorSpec(shape=(None, 4), dtype=tf.float32)
-                                                   )).shuffle(self._shuffle_buffer)
+                                                   ))
 
         set_val = tf.data.Dataset.from_generator(generator=lambda: data_iter(self._data_source_val),
                                                  output_signature=(
                                                      tf.TensorSpec(shape=self._train_resize + (3,), dtype=tf.float32),
                                                      tf.TensorSpec(shape=(None,), dtype=tf.float32),
                                                      tf.TensorSpec(shape=(None, 4), dtype=tf.float32)
-                                                 )).shuffle(self._shuffle_buffer)
+                                                 ))
 
         return set_train, set_val
 
@@ -87,8 +89,7 @@ class SSDDataLoader:
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)
-    loader = SSDDataLoader("../../datasets/coco",
-                           shuffle_buffer=1)
+    loader = SSDDataLoader("../../datasets/coco")
 
     for my_image, my_cls, my_box in tqdm(loader.get_dataset()[1]):
         print(my_cls, my_box)

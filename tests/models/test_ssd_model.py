@@ -7,7 +7,6 @@ from models.ssd_model import *
 
 class TestSSDObjectDetectionModel(unittest.TestCase):
     def __init__(self, *args, **kwargs):
-
         try:
             self.dataset = SSDDataLoader("./datasets/coco")
             self.coco_dataset_train, self.coco_dataset_val = self.dataset.get_dataset()
@@ -49,10 +48,11 @@ class TestSSDObjectDetectionModel(unittest.TestCase):
     def test_train(self):
         logging.basicConfig(level=logging.INFO)
         # self.model.load()
-        lr_schedule = optimizers.schedules.ExponentialDecay(0.0001, 1, 0.999)
+        lr_schedule = optimizers.schedules.ExponentialDecay(0.0005, 500, 0.999)
         self.model.train(self.dataset, epoch=100, batch_size=8,
                          optimizer=optimizers.Adam(lr_schedule),
-                         warmup=True)
+                         warmup=True, visualization_log_interval=500, warmup_step=2000,
+                         warmup_optimizer=optimizers.Adam(optimizers.schedules.PolynomialDecay(1e-6, 2000, 1e-3)))
         self.model.save()
 
 

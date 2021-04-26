@@ -7,7 +7,7 @@ import math
 import cv2
 import tensorflow as tf
 import numpy as np
-from tensorflow.keras import layers, Model, optimizers, activations
+from tensorflow.keras import layers, Model, optimizers
 from tqdm import tqdm
 
 from utils.bbox import match_bbox, apply_anchor_box, draw_bbox
@@ -23,10 +23,6 @@ class SSDObjectDetectionModel:
         self._INPUT_SHAPE = (300, 300, 3)
         self._CLASSES = classes + 1
         self._THRESH = 0.5
-
-        self._FILTER_SIZE_1 = 4 * (self._CLASSES + 4)
-        self._FILTER_SIZE_2 = 6 * (self._CLASSES + 4)
-        self._SAMPLE_SIZE = (self._CLASSES + 4)
 
         self._prior_box, self._model = self._build()
 
@@ -46,122 +42,99 @@ class SSDObjectDetectionModel:
             tf.summary.trace_export("SSD Model", step=0)
 
     def _build(self):
-        args_3_512 = {"filters": 512,
-                      "kernel_size": (3, 3),
-                      "padding": "SAME",
-                      "activation": "relu"}
-        args_1_512 = {"filters": 512,
-                      "kernel_size": (1, 1),
-                      "padding": "SAME",
-                      "activation": "relu"}
-        args_pool = {"pool_size": (2, 2), "strides": (2, 2), "padding": "SAME"}
-
         input_layer = layers.Input(shape=(300, 300, 3))
 
         model = tf.keras.applications.VGG16(include_top=False, input_shape=(300, 300, 3))
         pre_trained_vgg = Model(inputs=model.input,
                                 outputs=model.get_layer("block3_conv3").output,
-                                trainable=False,
+                                trainable=True,
                                 name="pre-trained-vgg"
                                 )(input_layer)
 
-        hidden_layer = layers.MaxPool2D(**args_pool)(pre_trained_vgg)
+        hidden_layer = layers.MaxPool2D(pool_size=(2, 2), strides=(2, 2), padding="SAME")(pre_trained_vgg)
 
-        hidden_layer = layers.Conv2D(**args_3_512)(hidden_layer)
-        hidden_layer = layers.Conv2D(**args_3_512)(hidden_layer)
-        hidden_layer = layers.Conv2D(**args_1_512)(hidden_layer)
+        hidden_layer = layers.Conv2D(filters=512,
+                                     kernel_size=(3, 3),
+                                     padding="SAME",
+                                     activation="relu")(hidden_layer)
+        hidden_layer = layers.Conv2D(filters=512,
+                                     kernel_size=(3, 3),
+                                     padding="SAME",
+                                     activation="relu")(hidden_layer)
+        hidden_layer = layers.Conv2D(filters=512,
+                                     kernel_size=(1, 1),
+                                     padding="SAME",
+                                     activation="relu")(hidden_layer)
 
         # ssd head
-        feature_map_1 = hidden_layer
+        feature_map = [hidden_layer]
 
         hidden_layer = layers.Conv2D(filters=1024,
                                      kernel_size=(3, 3),
                                      strides=(2, 2),
                                      activation="relu",
-                                     padding="SAME")(feature_map_1)
-        feature_map_2 = layers.Conv2D(filters=1024,
-                                      kernel_size=(1, 1),
-                                      activation="relu",
-                                      padding="SAME")(hidden_layer)
+                                     padding="SAME")(hidden_layer)
+        hidden_layer = layers.Conv2D(filters=1024,
+                                     kernel_size=(1, 1),
+                                     activation="relu",
+                                     padding="SAME")(hidden_layer)
+        feature_map.append(hidden_layer)
 
         hidden_layer = layers.Conv2D(filters=256,
                                      kernel_size=(1, 1),
                                      activation="relu",
-                                     padding="SAME")(feature_map_2)
-        feature_map_3 = layers.Conv2D(filters=512,
-                                      kernel_size=(3, 3),
-                                      strides=(2, 2),
-                                      activation="relu",
-                                      padding="SAME")(hidden_layer)
+                                     padding="SAME")(hidden_layer)
+        hidden_layer = layers.Conv2D(filters=512,
+                                     kernel_size=(3, 3),
+                                     strides=(2, 2),
+                                     activation="relu",
+                                     padding="SAME")(hidden_layer)
+        feature_map.append(hidden_layer)
 
         hidden_layer = layers.Conv2D(filters=128,
                                      kernel_size=(1, 1),
                                      activation="relu",
-                                     padding="SAME")(feature_map_3)
-        feature_map_4 = layers.Conv2D(filters=256,
-                                      kernel_size=(3, 3),
-                                      strides=(2, 2),
-                                      activation="relu",
-                                      padding="SAME")(hidden_layer)
+                                     padding="SAME")(hidden_layer)
+        hidden_layer = layers.Conv2D(filters=256,
+                                     kernel_size=(3, 3),
+                                     strides=(2, 2),
+                                     activation="relu",
+                                     padding="SAME")(hidden_layer)
+        feature_map.append(hidden_layer)
 
         hidden_layer = layers.Conv2D(filters=128,
                                      kernel_size=(1, 1),
                                      activation="relu",
-                                     padding="SAME")(feature_map_4)
-        feature_map_5 = layers.Conv2D(filters=256,
-                                      kernel_size=(3, 3),
-                                      activation="relu")(hidden_layer)
+                                     padding="SAME")(hidden_layer)
+        hidden_layer = layers.Conv2D(filters=256,
+                                     kernel_size=(3, 3),
+                                     activation="relu")(hidden_layer)
+        feature_map.append(hidden_layer)
 
         hidden_layer = layers.Conv2D(filters=128,
                                      kernel_size=(1, 1),
                                      activation="relu",
-                                     padding="SAME")(feature_map_5)
-        feature_map_6 = layers.Conv2D(filters=256,
-                                      kernel_size=(3, 3),
-                                      activation="relu")(hidden_layer)
+                                     padding="SAME")(hidden_layer)
+        hidden_layer = layers.Conv2D(filters=256,
+                                     kernel_size=(3, 3),
+                                     activation="relu")(hidden_layer)
+        feature_map.append(hidden_layer)
 
-        # detection result
-        detection_1 = layers.Conv2D(filters=self._FILTER_SIZE_1,
-                                    kernel_size=(3, 3),
-                                    activation=None,
-                                    padding="SAME")(feature_map_1)
-        detection_2 = layers.Conv2D(filters=self._FILTER_SIZE_2,
-                                    kernel_size=(3, 3),
-                                    activation=None,
-                                    padding="SAME")(feature_map_2)
-        detection_3 = layers.Conv2D(filters=self._FILTER_SIZE_2,
-                                    kernel_size=(3, 3),
-                                    activation=None,
-                                    padding="SAME")(feature_map_3)
-        detection_4 = layers.Conv2D(filters=self._FILTER_SIZE_2,
-                                    kernel_size=(3, 3),
-                                    activation=None,
-                                    padding="SAME")(feature_map_4)
-        detection_5 = layers.Conv2D(filters=self._FILTER_SIZE_1,
-                                    kernel_size=(3, 3),
-                                    activation=None,
-                                    padding="SAME")(feature_map_5)
-        detection_6 = layers.Conv2D(filters=self._FILTER_SIZE_1,
-                                    kernel_size=(3, 3),
-                                    activation=None,
-                                    padding="SAME")(feature_map_6)
+        num_priors = [4, 6, 6, 6, 4, 4]
 
-        prior_box = self._build_prior_box(
-            size_list=[detection_1.shape[1:3], detection_2.shape[1:3], detection_3.shape[1:3],
-                       detection_4.shape[1:3], detection_5.shape[1:3], detection_6.shape[1:3]]
-        )
+        loc = [layers.Conv2D(filters=n * 4,
+                             kernel_size=(3, 3),
+                             activation=None,
+                             padding="SAME")(feat) for n, feat in zip(num_priors, feature_map)]
+        conf = [layers.Conv2D(filters=n * self._CLASSES,
+                              kernel_size=(3, 3),
+                              activation=None,
+                              padding="SAME")(feat) for n, feat in zip(num_priors, feature_map)]
 
-        detection_1 = layers.Reshape(target_shape=(-1, self._CLASSES + 4))(detection_1)
-        detection_2 = layers.Reshape(target_shape=(-1, self._CLASSES + 4))(detection_2)
-        detection_3 = layers.Reshape(target_shape=(-1, self._CLASSES + 4))(detection_3)
-        detection_4 = layers.Reshape(target_shape=(-1, self._CLASSES + 4))(detection_4)
-        detection_5 = layers.Reshape(target_shape=(-1, self._CLASSES + 4))(detection_5)
-        detection_6 = layers.Reshape(target_shape=(-1, self._CLASSES + 4))(detection_6)
-        output_layer = layers.Concatenate(axis=-2)([detection_1, detection_2, detection_3,
-                                                    detection_4, detection_5, detection_6])
+        prior_box = self._build_prior_box(size_list=[o.shape[1:3] for o in loc])
 
-        loc = output_layer[..., :4]
-        conf = output_layer[..., 4:]
+        loc = layers.Concatenate(axis=-2)([layers.Reshape((-1, 4))(o) for o in loc])
+        conf = layers.Concatenate(axis=-2)([layers.Reshape((-1, self._CLASSES))(o) for o in conf])
 
         return prior_box, Model(inputs=input_layer,
                                 outputs=[loc, conf],
@@ -223,15 +196,36 @@ class SSDObjectDetectionModel:
 
         return batch_dataset
 
-    def _train_step(self, image, gt_cls, gt_bbox, gt_mask, ssd_optimizer,
+    def _train_step(self, image: tf.Tensor, gt_cls, gt_bbox, gt_mask, ssd_optimizer,
                     stage, set_names, set_colors, step, log_interval):
-        with tf.GradientTape() as tape:
-            pred_loc, pred_conf = self._model(image, training=True)
-            total_loss, info = self._ssd_loss((gt_cls, gt_bbox, gt_mask), (pred_loc, pred_conf))
-        ssd_gradient = tape.gradient(total_loss, self._model.trainable_variables)
-        ssd_gradient = [tf.clip_by_norm(x, 0.1) for x in ssd_gradient]
+        accumulate_gradient = None
+        batch_size = image.shape[0]
+        avg_count = 0
+
+        # for image, gt_cls, gt_bbox, gt_mask in zip(image, gt_cls, gt_bbox, gt_mask):
+        #     image, gt_cls, gt_bbox, gt_mask = tf.expand_dims(image, axis=0), tf.expand_dims(gt_cls, axis=0), \
+        #                                      tf.expand_dims(gt_bbox, axis=0), tf.expand_dims(gt_mask, axis=0)
+
+        step_size = 4
+        assert step_size != 1
+        for i in range(0, batch_size, step_size):
+            with tf.GradientTape() as tape:
+                pred_loc, pred_conf = self._model(image[i:i + step_size], training=True)
+                total_loss, info = self._ssd_loss(
+                    (gt_cls[i:i + step_size], gt_bbox[i:i + step_size], gt_mask[i:i + step_size]),
+                    (pred_loc, pred_conf))
+            ssd_gradient = tape.gradient(total_loss, self._model.trainable_variables)
+            ssd_gradient = [tf.clip_by_norm(x, 0.01) for x in ssd_gradient]
+
+            if accumulate_gradient is None:
+                accumulate_gradient = ssd_gradient
+            else:
+                accumulate_gradient = [g1 + g2 for g1, g2 in zip(ssd_gradient, accumulate_gradient)]
+            avg_count += 1
+        accumulate_gradient = [g / avg_count for g in accumulate_gradient]
+
         ssd_optimizer.apply_gradients(
-            zip(ssd_gradient, self._model.trainable_variables)
+            zip(accumulate_gradient, self._model.trainable_variables)
         )
 
         try:
@@ -469,7 +463,6 @@ class SSDObjectDetectionModel:
     def visualize(self, image, pred_conf, pred_bbox,
                   thresh=0.5, name="ssd visualize", show=False, mask=None, label_names=None, label_colors=None):
         pred_conf = tf.nn.softmax(pred_conf)
-        pred_score = None
         if mask is None:
             pred_score = tf.reduce_max(pred_conf[..., :-1], axis=-1)
             mask = pred_score > thresh

@@ -4,26 +4,38 @@ project:
 data:
   dataset: "coco"
   dataset_root: "../datasets/coco"
-  shuffle_buffer: 100
+  shuffle: true
   num_classes: 80
+  mini_batch:
+    enable: true
+    num_data: 10000
 
 model:
   log_dir: "../workshop/10000_sample_test"
-  log_interval: 100
+  log_interval: 10
   save: "model_last.h5"
 
   train:
-    epoch: 5
-    batch_size: 4
-    optimizer: "Adam"
+    epoch: 20
+    batch_size: 128
+    optimizer:
+      name: "Adam"
+      beta_1: 0.9
+      beta_2: 0.999
+      epsilon: 0.0000001
     lr:
       initial: 0.0005
       decay_step: 100
-      decay_rate: 0.999
+      decay_rate: 0.99
 
   warmup:
     enable: true
+    optimizer:
+      name: "Adam"
+      beta_1: 0.9
+      beta_2: 0.999
+      epsilon: 0.0000001
     lr:
-      step: 1000
+      step: 500
       lr_start: 0.000001
-      lr_end: 0.0001
+      lr_end: 0.001

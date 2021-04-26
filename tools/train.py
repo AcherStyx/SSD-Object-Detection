@@ -16,26 +16,35 @@ def load_config(yaml_file: str):
 
 
 def train(config):
-    data = SSDDataLoader(dataset_root=config["data"]["dataset_root"],
-                         shuffle_buffer=config["data"]["shuffle_buffer"],
-                         dataset=config["data"]["dataset"])
+    data = SSDDataLoader(
+        dataset_root=config["data"]["dataset_root"],
+        shuffle=config["data"]["shuffle"],
+        dataset=config["data"]["dataset"],
+        mini_batch=config["data"]["mini_batch"]["num_data"] if config["data"]["mini_batch"]["enable"] else 0)
     model = SSDObjectDetectionModel(classes=config["data"]["num_classes"],
                                     log_dir=config["model"]["log_dir"])
-
-    # scheduler->optimizer
-    if config["model"]["train"]["optimizer"].lower() == "adam":
-        lr_scheduler = tf.keras.optimizers.schedules.ExponentialDecay(
-            initial_learning_rate=config["model"]["train"]["lr"]["initial"],
-            decay_steps=config["model"]["train"]["lr"]["decay_step"],
-            decay_rate=config["model"]["train"]["lr"]["decay_rate"]
-        )
-        warmup_lr_scheduler = tf.keras.optimizers.schedules.PolynomialDecay(
-            initial_learning_rate=config["model"]["warmup"]["lr"]["lr_start"],
-            decay_steps=config["model"]["warmup"]["lr"]["step"],
-            end_learning_rate=config["model"]["warmup"]["lr"]["lr_end"]
-        )
-        optimizer = tf.keras.optimizers.Adam(lr_scheduler)
-        warmup_optimizer = tf.keras.optimizers.Adam(warmup_lr_scheduler)
+    # scheduler
+    lr_scheduler = tf.keras.optimizers.schedules.ExponentialDecay(
+        initial_learning_rate=config["model"]["train"]["lr"]["initial"],
+        decay_steps=config["model"]["train"]["lr"]["decay_step"],
+        decay_rate=config["model"]["train"]["lr"]["decay_rate"]
+    )
+    warmup_lr_scheduler = tf.keras.optimizers.schedules.PolynomialDecay(
+        initial_learning_rate=config["model"]["warmup"]["lr"]["lr_start"],
+        decay_steps=config["model"]["warmup"]["lr"]["step"],
+        end_learning_rate=config["model"]["warmup"]["lr"]["lr_end"]
+    )
+    # optimizer
+    if config["model"]["train"]["optimizer"]["name"].lower() == "adam":
+        optimizer = tf.keras.optimizers.Adam(lr_scheduler, **config["model"]["train"]["optimizer"])
+    elif config["model"]["train"]["optimizer"]["name"].lower() == "sgd":
+        optimizer = tf.keras.optimizers.SGD(lr_scheduler, **config["model"]["train"]["optimizer"])
+    else:
+        raise ValueError
+    if config["model"]["warmup"]["optimizer"]["name"].lower() == "adam":
+        warmup_optimizer = tf.keras.optimizers.Adam(warmup_lr_scheduler, **config["model"]["warmup"]["optimizer"])
+    elif config["model"]["warmup"]["optimizer"]["name"].lower() == "sgd":
+        warmup_optimizer = tf.keras.optimizers.SGD(warmup_lr_scheduler, **config["model"]["warmup"]["optimizer"])
     else:
         raise ValueError
 
@@ -48,7 +57,7 @@ def train(config):
                 epoch=config["model"]["train"]["epoch"],
                 batch_size=config["model"]["train"]["batch_size"],
                 optimizer=optimizer,
-                warmup=config["model"]["warmup"],
+                warmup=config["model"]["warmup"]["enable"],
                 warmup_optimizer=warmup_optimizer,
                 warmup_step=config["model"]["warmup"]["lr"]["step"],
                 visualization_log_interval=config["model"]["log_interval"])

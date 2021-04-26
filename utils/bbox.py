@@ -115,7 +115,7 @@ def draw_bbox(image, bbox, cls_label, cls_names, cls_color, scores=None, show_na
     @return:
     """
     # check length
-    if scores is not  None:
+    if scores is not None:
         assert len(bbox) == len(cls_label) == len(scores)
     else:
         assert len(bbox) == len(cls_label)
@@ -129,6 +129,7 @@ def draw_bbox(image, bbox, cls_label, cls_names, cls_color, scores=None, show_na
 
     image_numpy = cv2.cvtColor(image_numpy, cv2.COLOR_RGB2BGR)
     for index, (cat, (cx, cy, w, h)) in enumerate(zip(cls_label, bbox)):
+        cx, cy, w, h = np.clip((cx, cy, w, h), -10000, 10000)
         cv2.rectangle(image_numpy,
                       (int(cx - w / 2), int(cy - h / 2)), (int(cx + w / 2), int(cy + h / 2)),
                       cls_color[int(cat)], 2)
