@@ -17,18 +17,48 @@ logger = logging.getLogger(__name__)
 
 
 class SSDObjectDetectionModel:
+    class TrainConfig:
+        def __init__(self,
+                     epoch: int,
+                     batch_size: int,
+                     optimizer: optimizers.Optimizer,
+                     warmup: bool = True,  # default warmup config
+                     warmup_optimizer: optimizers.Optimizer = optimizers.Adam(
+                         optimizers.schedules.PolynomialDecay(1e-6, 1000, 0.001)),
+                     warmup_step: int = 1000,
+                     visualization_log_interval: int = 10,
+                     split_batch: bool = False,
+                     split_batch_size: int = 4):
+            self.epoch = epoch
+            self.batch_size = batch_size
+            self.optimizer = optimizer
+            self.warmup = warmup
+            self.warmup_optimizer = warmup_optimizer
+            self.warmup_step = warmup_step
+            self.visualization_log_interval = visualization_log_interval
+            self.split_batch = split_batch
+            self.split_batch_size = split_batch_size
+
+    class Config:
+        def __init__(self, classes: int, log_dir: str):
+            self.classes = classes
+            self.log_dir = log_dir
+            self.input_shape = (300, 300, 3)
+            self.classes = classes + 1
+            self.thresh = 0.5
+
     def __init__(self,
                  classes,
                  log_dir):
-        self._INPUT_SHAPE = (300, 300, 3)
-        self._CLASSES = classes + 1
-        self._THRESH = 0.5
+        # change log dir
+        time_stamp = time.strftime("%Y-%m-%d-%H%M%S", time.localtime())
+        log_dir = os.path.join(log_dir, time_stamp)
+
+        self.cfg = SSDObjectDetectionModel.Config(classes,
+                                                  log_dir)
 
         self._prior_box, self._model = self._build()
 
-        time_stamp = time.strftime("%Y-%m-%d-%H%M%S", time.localtime())
-        log_dir = os.path.join(log_dir, time_stamp)
-        self._log_dir = log_dir
         self._tensorboard_writer = tf.summary.create_file_writer(os.path.join(log_dir, "tensorboard"))
 
         # write graph
@@ -126,7 +156,7 @@ class SSDObjectDetectionModel:
                              kernel_size=(3, 3),
                              activation=None,
                              padding="SAME")(feat) for n, feat in zip(num_priors, feature_map)]
-        conf = [layers.Conv2D(filters=n * self._CLASSES,
+        conf = [layers.Conv2D(filters=n * self.cfg.classes,
                               kernel_size=(3, 3),
                               activation=None,
                               padding="SAME")(feat) for n, feat in zip(num_priors, feature_map)]
@@ -134,7 +164,7 @@ class SSDObjectDetectionModel:
         prior_box = self._build_prior_box(size_list=[o.shape[1:3] for o in loc])
 
         loc = layers.Concatenate(axis=-2)([layers.Reshape((-1, 4))(o) for o in loc])
-        conf = layers.Concatenate(axis=-2)([layers.Reshape((-1, self._CLASSES))(o) for o in conf])
+        conf = layers.Concatenate(axis=-2)([layers.Reshape((-1, self.cfg.classes))(o) for o in conf])
 
         return prior_box, Model(inputs=input_layer,
                                 outputs=[loc, conf],
@@ -151,10 +181,10 @@ class SSDObjectDetectionModel:
                 cy = (y + 0.5) / h
 
                 # TODO: use calculate result
-                s_k = s_k_refer[index] / self._INPUT_SHAPE[0]
+                s_k = s_k_refer[index] / self.cfg.input_shape[0]
                 prior_box.append([cx, cy, s_k, s_k])
 
-                s_k_prime = math.sqrt(s_k * (s_k_refer[index + 1] / self._INPUT_SHAPE[0]))
+                s_k_prime = math.sqrt(s_k * (s_k_refer[index + 1] / self.cfg.input_shape[0]))
                 prior_box.append([cx, cy, s_k_prime, s_k_prime])
 
                 for ratio in aspect_ratio[index]:
@@ -185,9 +215,9 @@ class SSDObjectDetectionModel:
                 yield iter_image, (matched_cls, matched_loc, matched_mask)
 
         batch_dataset = tf.data.Dataset.from_generator(
-            generator=lambda: batch_data_iter(dataset, self._prior_box, self._THRESH),
+            generator=lambda: batch_data_iter(dataset, self._prior_box, self.cfg.thresh),
             output_signature=(
-                tf.TensorSpec(self._INPUT_SHAPE, dtype=tf.float32),
+                tf.TensorSpec(self.cfg.input_shape, dtype=tf.float32),
                 (tf.TensorSpec((np.shape(self._prior_box)[0],), dtype=tf.int32),
                  tf.TensorSpec(np.shape(self._prior_box), dtype=tf.float32),
                  tf.TensorSpec((np.shape(self._prior_box)[0],), dtype=tf.bool))
@@ -197,22 +227,23 @@ class SSDObjectDetectionModel:
         return batch_dataset
 
     def _train_step(self, image: tf.Tensor, gt_cls, gt_bbox, gt_mask, ssd_optimizer,
-                    stage, set_names, set_colors, step, log_interval):
+                    stage, set_names, set_colors, step, cfg: TrainConfig):
         accumulate_gradient = None
         batch_size = image.shape[0]
         avg_count = 0
 
-        # for image, gt_cls, gt_bbox, gt_mask in zip(image, gt_cls, gt_bbox, gt_mask):
-        #     image, gt_cls, gt_bbox, gt_mask = tf.expand_dims(image, axis=0), tf.expand_dims(gt_cls, axis=0), \
-        #                                      tf.expand_dims(gt_bbox, axis=0), tf.expand_dims(gt_mask, axis=0)
+        if not cfg.split_batch:
+            batch_step = batch_size
+        else:
+            batch_step = cfg.split_batch_size
 
-        step_size = 4
-        assert step_size != 1
-        for i in range(0, batch_size, step_size):
+        for i in range(0, batch_size, batch_step):
             with tf.GradientTape() as tape:
-                pred_loc, pred_conf = self._model(image[i:i + step_size], training=True)
+                pred_loc, pred_conf = self._model(image[i:i + batch_step], training=True)
                 total_loss, info = self._ssd_loss(
-                    (gt_cls[i:i + step_size], gt_bbox[i:i + step_size], gt_mask[i:i + step_size]),
+                    (gt_cls[i:i + batch_step],
+                     gt_bbox[i:i + batch_step],
+                     gt_mask[i:i + batch_step]),
                     (pred_loc, pred_conf))
             ssd_gradient = tape.gradient(total_loss, self._model.trainable_variables)
             ssd_gradient = [tf.clip_by_norm(x, 0.01) for x in ssd_gradient]
@@ -232,7 +263,7 @@ class SSDObjectDetectionModel:
             info["lr"] = ssd_optimizer.lr.numpy()
         except AttributeError:
             info["lr"] = ssd_optimizer.lr(step).numpy()
-        if step % log_interval == 0:
+        if step % cfg.visualization_log_interval == 0:
             img_ssd_pred = self.visualize(image, pred_conf, pred_loc,
                                           name="ssd_pred", thresh=0.3, show=False,
                                           label_names=set_names, label_colors=set_colors)
@@ -250,75 +281,58 @@ class SSDObjectDetectionModel:
         tf.summary.scalar(stage + "/loc loss", info["loc loss"], step=step)
         tf.summary.scalar(stage + "/cls loss pos", info["cls loss pos"], step=step)
         tf.summary.scalar(stage + "/cls loss neg", info["cls loss neg"], step=step)
+        tf.summary.scalar(stage + "/loss", info["loc loss"] + info["cls loss pos"] + info["cls loss neg"], step=step)
         tf.summary.scalar(stage + "/lr", info["lr"], step=step)
 
         return pred_conf, pred_loc, info
 
-    def _train(self, data_loader: SSDDataLoader,
-               epoch, batch_size, optimizer,
-               warmup, warmup_optimizer, warmup_step, log_interval):
+    def _train(self, data_loader: SSDDataLoader, cfg: TrainConfig):
 
         train_set, val_set = data_loader.get_dataset()
         set_names, set_colors = data_loader.get_names_and_colors()
-        batch_dataset = self.get_train_set(train_set, batch_size)
+        batch_dataset = self.get_train_set(train_set, batch_size=cfg.batch_size)
 
-        if warmup:
-            logger.info("Warm up for %s steps, lr %s -> %s", warmup_step)
+        if cfg.warmup:
+            logger.info("Warm up for %s steps", cfg.warmup_step)
             step = 0
-            bar = tqdm(total=warmup_step)
+            bar = tqdm(total=cfg.warmup_step)
             while True:
                 for image, (gt_cls, gt_bbox, gt_mask) in batch_dataset:
                     bar.update(1)
                     step += 1
-                    pred_conf, pred_loc, info = self._train_step(image, gt_cls, gt_bbox, gt_mask, warmup_optimizer,
-                                                                 "warmup", set_names, set_colors, step, log_interval)
+                    pred_conf, pred_loc, info = self._train_step(image, gt_cls, gt_bbox, gt_mask, cfg.warmup_optimizer,
+                                                                 "warmup", set_names, set_colors, step, cfg)
                     bar.set_postfix(info)
 
-                    if step >= warmup_step:
+                    if step >= cfg.warmup_step:
                         break
-                if step >= warmup_step:
+                if step >= cfg.warmup_step:
                     bar.close()
                     break
 
         step = 0
-        for i in range(epoch):
-            logger.info("Epoch %s/%s", i + 1, epoch)
+        for i in range(cfg.epoch):
+            logger.info("Epoch %s/%s", i + 1, cfg.epoch)
             bar = tqdm()
             for image, (gt_cls, gt_bbox, gt_mask) in batch_dataset:
                 step += 1
-                pred_conf, pred_loc, info = self._train_step(image, gt_cls, gt_bbox, gt_mask, optimizer,
-                                                             "train", set_names, set_colors, step, log_interval)
+                pred_conf, pred_loc, info = self._train_step(image, gt_cls, gt_bbox, gt_mask, cfg.optimizer,
+                                                             "train", set_names, set_colors, step, cfg)
                 bar.update(1)
                 bar.set_postfix(info)
             bar.close()
-            self.save(os.path.join(self._log_dir, "model_weight", "model_weight_epoch_" + str(i) + ".h5"))
+            self.save(os.path.join(self.cfg.log_dir, "model_weight", "model_weight_epoch_" + str(i) + ".h5"))
 
-    def train(self, data_loader: SSDDataLoader,
-              epoch, batch_size, optimizer,
-              warmup=True, warmup_optimizer=optimizers.Adam(optimizers.schedules.PolynomialDecay(1e-6, 1000, 0.001)),
-              warmup_step=1000, visualization_log_interval=10):
-        """
-        train ssd model
-        @param data_loader: instance of SSDDataLoader
-        @param epoch:
-        @param batch_size:
-        @param optimizer: main optimizer for training model
-        @param warmup:
-        @param warmup_optimizer: optimizer with learning rate scheduler (see default config)
-        @param warmup_step:
-        @param visualization_log_interval: write visualization result of detection to tensorboard
-        """
-        if warmup is True:
-            assert warmup_optimizer is not None, "Define a warmup optimizer if you want to enable warmup!"
+    def train(self, data_loader: SSDDataLoader, cfg: TrainConfig):
+        if cfg.warmup is True:
+            assert cfg.warmup_optimizer is not None, "Define a warmup optimizer if you want to enable warmup!"
 
         try:
             if self._tensorboard_writer is not None:
                 with self._tensorboard_writer.as_default():
-                    self._train(data_loader, epoch, batch_size, optimizer,
-                                warmup, warmup_optimizer, warmup_step, visualization_log_interval)
+                    self._train(data_loader, cfg)
             else:
-                self._train(data_loader, epoch, batch_size, optimizer,
-                            warmup, warmup_optimizer, warmup_step, visualization_log_interval)
+                self._train(data_loader, cfg)
         except Exception as e:
             self.save("error_exit_save.h5")
             logger.critical("Error occurred while training, last model weight is saved to 'error_exit_save.h5'")
@@ -403,7 +417,7 @@ class SSDObjectDetectionModel:
         return self._prior_box
 
     def get_log_dir(self):
-        return self._log_dir
+        return self.cfg.log_dir
 
     def get_log_writer(self) -> tf.summary.SummaryWriter:
         return self._tensorboard_writer
@@ -424,8 +438,8 @@ class SSDObjectDetectionModel:
 
             cv2.rectangle(
                 image,
-                (int((cx - w / 2) * self._INPUT_SHAPE[1]), int((cy - h / 2) * self._INPUT_SHAPE[0])),
-                (int((cx + w / 2) * self._INPUT_SHAPE[1]), int((cy + h / 2) * self._INPUT_SHAPE[0])),
+                (int((cx - w / 2) * self.cfg.input_shape[1]), int((cy - h / 2) * self.cfg.input_shape[0])),
+                (int((cx + w / 2) * self.cfg.input_shape[1]), int((cy + h / 2) * self.cfg.input_shape[0])),
                 (255, 255, 255)
             )
 

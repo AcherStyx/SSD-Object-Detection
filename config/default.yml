@@ -4,9 +4,9 @@ project:
 data:
   dataset: "coco"
   dataset_root: "../datasets/coco"
-  shuffle: true
+  shuffle: true   # efficient
   num_classes: 80
-  mini_batch:
+  mini_batch: # test on a small subset
     enable: true
     num_data: 10000
 
@@ -14,28 +14,29 @@ model:
   log_dir: "../workshop/10000_sample_test"
   log_interval: 10
   save: "model_last.h5"
-
   train:
     epoch: 20
-    batch_size: 128
+    batch_size: 32
     optimizer:
       name: "Adam"
       beta_1: 0.9
       beta_2: 0.999
       epsilon: 0.0000001
     lr:
-      initial: 0.0005
+      initial: 0.001
       decay_step: 100
       decay_rate: 0.99
-
   warmup:
     enable: true
+    step: 500
     optimizer:
       name: "Adam"
       beta_1: 0.9
       beta_2: 0.999
       epsilon: 0.0000001
     lr:
-      step: 500
-      lr_start: 0.000001
-      lr_end: 0.001
+      start: 0.000001
+      end: 0.001
+  split_train: # for low gpu memory, train with large batch_size
+    enable: true
+    batch_size: 4

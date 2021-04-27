@@ -1,17 +1,21 @@
 import os
 import json
+import logging
+import yaml
+import argparse
+
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 import tensorflow as tf
 from models import SSDObjectDetectionModel
 from data_loaders import SSDDataLoader
 
-import yaml
-import argparse
+logger = logging.getLogger(__name__)
 
 
 def load_config(yaml_file: str):
     with open(yaml_file, "r") as f:
-        config = yaml.load(f)
+        config = yaml.safe_load(f)
     return config
 
 
@@ -30,9 +34,9 @@ def train(config):
         decay_rate=config["model"]["train"]["lr"]["decay_rate"]
     )
     warmup_lr_scheduler = tf.keras.optimizers.schedules.PolynomialDecay(
-        initial_learning_rate=config["model"]["warmup"]["lr"]["lr_start"],
-        decay_steps=config["model"]["warmup"]["lr"]["step"],
-        end_learning_rate=config["model"]["warmup"]["lr"]["lr_end"]
+        initial_learning_rate=config["model"]["warmup"]["lr"]["start"],
+        decay_steps=config["model"]["warmup"]["step"],
+        end_learning_rate=config["model"]["warmup"]["lr"]["end"]
     )
     # optimizer
     if config["model"]["train"]["optimizer"]["name"].lower() == "adam":
@@ -54,17 +58,20 @@ def train(config):
         tf.summary.text("config", str(config))
 
     model.train(data_loader=data,
-                epoch=config["model"]["train"]["epoch"],
-                batch_size=config["model"]["train"]["batch_size"],
-                optimizer=optimizer,
-                warmup=config["model"]["warmup"]["enable"],
-                warmup_optimizer=warmup_optimizer,
-                warmup_step=config["model"]["warmup"]["lr"]["step"],
-                visualization_log_interval=config["model"]["log_interval"])
+                cfg=SSDObjectDetectionModel.TrainConfig(epoch=config["model"]["train"]["epoch"],
+                                                        batch_size=config["model"]["train"]["batch_size"],
+                                                        optimizer=optimizer,
+                                                        warmup=config["model"]["warmup"]["enable"],
+                                                        warmup_optimizer=warmup_optimizer,
+                                                        warmup_step=config["model"]["warmup"]["step"],
+                                                        visualization_log_interval=config["model"]["log_interval"],
+                                                        split_batch=config["model"]["split_train"]["enable"],
+                                                        split_batch_size=config["model"]["split_train"]["batch_size"]))
     model.save(os.path.join(model.get_log_dir(), config["model"]["save"]))
 
 
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.DEBUG)
     parser = argparse.ArgumentParser(description="train ssd model")
     parser.add_argument("config", type=str, help="yaml config file")
 
